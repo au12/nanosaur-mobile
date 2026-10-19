@@ -1,16 +1,16 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>nanosaur-web</Name>
-  <Repository>ghcr.io/au12/nanosaur-web:latest</Repository>
-  <Registry>https://github.com/au12/nanosaur-web/pkgs/container/nanosaur-web</Registry>
+  <Name>nanosaur-mobile</Name>
+  <Repository>ghcr.io/au12/nanosaur-mobile:latest</Repository>
+  <Registry>https://github.com/au12/nanosaur-mobile/pkgs/container/nanosaur-mobile</Registry>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
-  <Support>https://github.com/au12/nanosaur-web</Support>
+  <Support>https://github.com/au12/nanosaur-mobile</Support>
   <Project>https://github.com/jorio/Nanosaur</Project>
   <Overview>Pangea Software's Nanosaur (1998) in the browser: WebAssembly build of Iliyas Jorio's modern source with touch controls, a compact HUD and offline PWA support. Serve it over HTTPS (e.g. Nginx Proxy Manager) so phones can install it and play offline.</Overview>
   <Category>GameServers: Other:</Category>
   <WebUI>http://[IP]:[PORT:80]/</WebUI>
-  <Icon>https://raw.githubusercontent.com/au12/nanosaur-web/main/shell/icons/icon-192.png</Icon>
+  <Icon>https://raw.githubusercontent.com/au12/nanosaur-mobile/main/shell/icons/icon-192.png</Icon>
   <ExtraParams>--restart unless-stopped</ExtraParams>
   <Config Name="Web port" Target="80" Default="8086" Mode="tcp" Description="Port the game is served on" Type="Port" Display="always" Required="true" Mask="false">8086</Config>
 </Container>

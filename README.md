@@ -1,4 +1,4 @@
-# Nanosaur Web
+# Nanosaur Mobile
 
 Pangea Software's **Nanosaur** (1998), playable in any modern browser — phone, tablet or desktop — from a single Docker container.
 
@@ -35,11 +35,11 @@ No websockets or special headers are needed; the container sets the right MIME t
 Either build on the server:
 
 ```sh
-cd /mnt/user/appdata && git clone <this repo> nanosaur-web && cd nanosaur-web
-docker build -t nanosaur-web .
+cd /mnt/user/appdata && git clone https://github.com/au12/nanosaur-mobile && cd nanosaur-mobile
+docker build -t nanosaur-mobile .
 ```
 
-…and add a container using image `nanosaur-web` with port `8086 → 80`. Or push this repo to GitHub: the included workflow (`.github/workflows/docker.yml`) builds `ghcr.io/<you>/nanosaur-web:latest` for amd64 and arm64, and `unraid/nanosaur-web.xml` is a ready-made template for it (copy it to `/boot/config/plugins/dockerMan/templates-user/`, adjusting the repository name if yours isn't `au12`).
+…and add a container using image `nanosaur-mobile` with port `8086 → 80`. Or use the prebuilt image: the included workflow (`.github/workflows/docker.yml`) builds `ghcr.io/au12/nanosaur-mobile:latest` for amd64 and arm64 on every push to `main`, and `unraid/nanosaur-mobile.xml` is a ready-made template for it (copy it to `/boot/config/plugins/dockerMan/templates-user/`). GitHub makes new container packages private; set the package to public in its settings, or `docker login ghcr.io` on Unraid, so the server can pull it.
 
 ## Controls
 
@@ -83,7 +83,7 @@ With [emsdk](https://emscripten.org/docs/getting_started/downloads.html) 4.0.10 
 git clone https://github.com/jorio/Nanosaur && cd Nanosaur
 git checkout 29c451b8cedd2febaf0d0d6b09b678e08d42c926 && git submodule update --init --recursive
 git clone --depth 1 --branch release-3.4.4 https://github.com/libsdl-org/SDL extern/SDL
-/path/to/nanosaur-web/scripts/build-web.sh . /path/to/output
+/path/to/nanosaur-mobile/scripts/build-web.sh . /path/to/output
 ```
 
 Serve the output folder with any static web server.
