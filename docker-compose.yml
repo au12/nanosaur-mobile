@@ -1,0 +1,8 @@
+services:
+  nanosaur:
+    build: .
+    image: nanosaur-web:latest
+    container_name: nanosaur
+    restart: unless-stopped
+    ports:
+      - "8086:80"

@@ -1,0 +1,6 @@
+.git
+dist
+build-web
+*.md
+!README.md
+**/__pycache__

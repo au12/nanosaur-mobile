@@ -1,0 +1,3391 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f76a20b..d75cc7b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -95,7 +95,9 @@ endif()
+ 
+ add_subdirectory(extern/Pomme)
+ 
+-find_package(OpenGL REQUIRED)
++if(NOT EMSCRIPTEN)
++	find_package(OpenGL REQUIRED)
++endif()
+ 
+ #------------------------------------------------------------------------------
+ # EXECUTABLE TARGET
+@@ -209,7 +211,48 @@ else()
+ endif()
+ 
+ # Link core dependencies
+-target_link_libraries(${GAME_TARGET} PRIVATE Pomme OpenGL::GL)
++if(NOT EMSCRIPTEN)
++	target_link_libraries(${GAME_TARGET} PRIVATE Pomme OpenGL::GL)
++else()
++	target_link_libraries(${GAME_TARGET} PRIVATE Pomme)
++endif()
++
++#------------------------------------------------------------------------------
++# EMSCRIPTEN / WEB BUILD
++#------------------------------------------------------------------------------
++
++if(EMSCRIPTEN)
++	# Route the game's legacy fixed-function GL calls through the WebGL2 emulation layer
++	target_compile_options(${GAME_TARGET} PRIVATE
++		"SHELL:-include ${GAME_SRCDIR}/Web/WebGLRedirect.h"
++		-fexceptions
++		-Wno-unused-parameter
++	)
++	target_compile_options(Pomme PRIVATE -fexceptions)
++	set_source_files_properties(${GAME_SRCDIR}/Web/WebGL_FFP.c PROPERTIES COMPILE_DEFINITIONS NANOSAUR_WEBGL_FFP_IMPL=1)
++
++	set(WEB_EXPORTED_FUNCTIONS "_main,_malloc,_free,_Web_SetVirtualNeed,_Web_PulseScancode,_Web_SetStick,_Web_SetTouchMode,_Web_TapAt,_Web_Swipe,_Web_PauseChoice,_Web_SetHighScoreName,_Web_ResumeFromQuit,_Web_GetKeyBinding,_Web_GetDefaultKeyBinding,_Web_SetKeyBinding,_Web_ResetKeyBindings,_Web_GetScancodeName,_Web_GetNumRemappableNeeds,_Web_GetPref,_Web_SetPref,_Web_SavePrefs,_Web_PauseGame,_Web_GetMainMenuSelection")
++
++	target_link_options(${GAME_TARGET} PRIVATE
++		-fexceptions
++		-sASYNCIFY=1
++		-sASYNCIFY_STACK_SIZE=262144
++		-sSTACK_SIZE=4194304
++		-sINITIAL_MEMORY=134217728
++		-sALLOW_MEMORY_GROWTH=1
++		-sMIN_WEBGL_VERSION=2
++		-sMAX_WEBGL_VERSION=2
++		-sENVIRONMENT=web
++		-sEXIT_RUNTIME=0
++		-sINVOKE_RUN=1
++		-sFORCE_FILESYSTEM=1
++		-sEXPORTED_FUNCTIONS=${WEB_EXPORTED_FUNCTIONS}
++		"-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,UTF8ToString,stringToUTF8,HEAPU8,HEAP32,HEAPF32,addRunDependency,removeRunDependency"
++		-lidbfs.js
++		"SHELL:--preload-file ${GAME_DATADIR}@/Data"
++	)
++	set_target_properties(${GAME_TARGET} PROPERTIES OUTPUT_NAME "nanosaur" SUFFIX ".js")
++endif()
+ 
+ # Add required frameworks for KillMacMouseAcceleration
+ if(APPLE)
+@@ -282,8 +325,10 @@ else()
+ 	set(GAME_DATA_TARGET_LOCATION "$<TARGET_FILE_DIR:${GAME_TARGET}>/Data")
+ endif()
+ 
+-add_custom_command(TARGET ${GAME_TARGET} POST_BUILD
+-	COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAME_DATADIR}" "${GAME_DATA_TARGET_LOCATION}")
++if(NOT EMSCRIPTEN)
++	add_custom_command(TARGET ${GAME_TARGET} POST_BUILD
++		COMMAND ${CMAKE_COMMAND} -E copy_directory "${GAME_DATADIR}" "${GAME_DATA_TARGET_LOCATION}")
++endif()
+ 
+ if(APPLE)
+ 	set(INFO_PLIST "${GAME_DATA_TARGET_LOCATION}/../Info.plist")
+diff --git a/src/Boot.cpp b/src/Boot.cpp
+index a8b0b43..5aa1541 100644
+--- a/src/Boot.cpp
++++ b/src/Boot.cpp
+@@ -81,6 +81,14 @@ static void Boot(int argc, char** argv)
+ 	SDL_SetLogPriorities(SDL_LOG_PRIORITY_INFO);
+ #endif
+ 
++#if __EMSCRIPTEN__
++	// Mount IndexedDB-backed storage for prefs & high scores before anything reads them
++	Web_InitPersistentStorage();
++
++	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");				// touch is handled by the HTML shell
++	SDL_SetHint(SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT, "#window");
++#endif
++
+ 	// Start our "machine"
+ 	Pomme::Init();
+ 
+@@ -99,9 +107,19 @@ retryVideo:
+ 	}
+ 
+ 	// Create window
++#if __EMSCRIPTEN__
++	// WebGL 2 (== GLES 3.0); legacy fixed-function calls are emulated in Web/WebGL_FFP.c
++	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
++	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
++	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++	SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);					// opaque canvas
++	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
++	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
++#else
+ 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+ 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+ 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++#endif
+ 
+ 	gCurrentAntialiasingLevel = gGamePrefs.antialiasingLevel;
+ 	if (gCurrentAntialiasingLevel != 0)
+@@ -109,6 +127,13 @@ retryVideo:
+ 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+ 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 1 << gCurrentAntialiasingLevel);
+ 	}
++#if __EMSCRIPTEN__
++	else
++	{
++		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
++		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
++	}
++#endif
+ 
+ 	gSDLWindow = SDL_CreateWindow(
+ 		GAME_FULL_NAME " " GAME_VERSION, 640, 480,
+@@ -142,6 +167,10 @@ retryVideo:
+ 	{
+ 		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, GAME_FULL_NAME, "Couldn't load gamecontrollerdb.txt!", gSDLWindow);
+ 	}
++
++#if __EMSCRIPTEN__
++	Web_OnBootComplete();
++#endif
+ }
+ 
+ static void Shutdown()
+@@ -194,7 +223,11 @@ int main(int argc, char** argv)
+ 	if (!success)
+ 	{
+ 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Uncaught exception: %s", uncaught.c_str());
++#if __EMSCRIPTEN__
++		Web_ShowAlert(uncaught.c_str(), true);
++#else
+ 		SDL_ShowSimpleMessageBox(0, GAME_FULL_NAME, uncaught.c_str(), nullptr);
++#endif
+ 	}
+ 
+ 	return success ? 0 : 1;
+diff --git a/src/Headers/game.h b/src/Headers/game.h
+index 9f03472..388ebca 100644
+--- a/src/Headers/game.h
++++ b/src/Headers/game.h
+@@ -62,6 +62,10 @@ extern "C"
+ #include "weapons.h"
+ #include "window.h"
+ 
++#if __EMSCRIPTEN__
++#include "../Web/Web.h"
++#endif
++
+ extern	Boolean					gDisableAnimSounds;
+ extern	Boolean					gGamePaused;
+ extern	Boolean					gGameOverFlag;
+diff --git a/src/Headers/structs.h b/src/Headers/structs.h
+index 551ea99..d2cc30b 100644
+--- a/src/Headers/structs.h
++++ b/src/Headers/structs.h
+@@ -313,8 +313,15 @@ typedef struct
+ 	Boolean	debugInfoInTitleBar;
+ 	Boolean	nanosaurTeethFix;
+ 	Boolean	force4x3;
++#if __EMSCRIPTEN__
++	Byte	hudStyle;			// web port: 0 = compact overlay HUD, 1 = classic 1998 frame
++#endif
+ 	KeyBinding keys[NUM_CONTROL_NEEDS];
+ }PrefsType;
+ 
++#if __EMSCRIPTEN__
++#define PREFS_MAGIC "Nanosaur Prefs v5 web1"
++#else
+ #define PREFS_MAGIC "Nanosaur Prefs v5"
++#endif
+ 
+diff --git a/src/Player/Player_Control.c b/src/Player/Player_Control.c
+index 97505b2..20b3b1b 100644
+--- a/src/Player/Player_Control.c
++++ b/src/Player/Player_Control.c
+@@ -53,6 +53,90 @@ float	gMySpeedPuffCounter;
+ #define	ExhaustTimer	SpecialF[0]
+ 
+ 
++#if __EMSCRIPTEN__
++/****************************/
++/*  WEB: TOUCH STEERING     */
++/****************************/
++//
++// The touch stick is screen-relative: push in a direction and Nano heads that way.
++// The camera frame is sampled when the drag starts (and re-sampled whenever the finger
++// swings to a clearly different direction), so holding a direction runs in a straight
++// line instead of circling as the chase camera swings around behind the player.
++//
++
++#define TOUCH_STICK_DEADZONE		0.16f
++#define TOUCH_RESAMPLE_ANGLE		(PI * 50.0f / 180.0f)
++#define TOUCH_TURN_GAIN				7.0f
++#define TOUCH_MAX_TURN_SPEED		4.5f
++#define TOUCH_TURN_DEADBAND			0.10f
++
++static bool		gTouchSteerActive = false;
++static float	gTouchSteerHeading = 0;
++static float	gTouchSteerMagnitude = 0;
++static float	gTouchRefCamHeading = 0;
++static float	gTouchRefStickAngle = 0;
++
++static float WrapAngle(float a)
++{
++	while (a > PI)	a -= PI2;
++	while (a < -PI)	a += PI2;
++	return a;
++}
++
++static float GetCameraHeading(void)
++{
++	if (!gGameViewInfoPtr)
++		return gPlayerObj ? gPlayerObj->Rot.y : 0;
++	const TQ3Point3D* from	= &gGameViewInfoPtr->cameraPlacement.cameraLocation;
++	const TQ3Point3D* to	= &gGameViewInfoPtr->cameraPlacement.pointOfInterest;
++	float dx = to->x - from->x;
++	float dz = to->z - from->z;
++	if (fabsf(dx) < 0.001f && fabsf(dz) < 0.001f)
++		return gPlayerObj ? gPlayerObj->Rot.y : 0;
++	return atan2f(-dx, -dz);			// facing vector of Rot.y == (-sin, -cos)
++}
++
++static void UpdateTouchSteering(void)
++{
++	float sx, sy;
++	bool held = Web_GetStick(&sx, &sy);
++	float mag = sqrtf(sx*sx + sy*sy);
++
++	if (!held || mag < TOUCH_STICK_DEADZONE || !gPlayerObj)
++	{
++		gTouchSteerActive = false;
++		return;
++	}
++
++	float stickAngle = atan2f(sx, -sy);		// 0 = up (away from camera), +PI/2 = right
++
++	if (!gTouchSteerActive
++		|| fabsf(WrapAngle(stickAngle - gTouchRefStickAngle)) > TOUCH_RESAMPLE_ANGLE)
++	{
++		gTouchRefCamHeading = GetCameraHeading();
++		gTouchRefStickAngle = stickAngle;
++	}
++
++	gTouchSteerActive = true;
++	gTouchSteerHeading = WrapAngle(gTouchRefCamHeading - stickAngle);		// increasing Rot.y turns left
++	gTouchSteerMagnitude = SDL_min(1.0f, (mag - TOUCH_STICK_DEADZONE) / (1.0f - TOUCH_STICK_DEADZONE));
++}
++
++static void ApplyTouchSteering(ObjNode* theNode, float slugFactor, float accel)
++{
++	if (!gTouchSteerActive)
++		return;
++
++	float diff = WrapAngle(gTouchSteerHeading - theNode->Rot.y);
++	float rate = SDL_clamp(diff * TOUCH_TURN_GAIN, -TOUCH_MAX_TURN_SPEED, TOUCH_MAX_TURN_SPEED);
++	theNode->Rot.y += rate * slugFactor * gFramesPerSecondFrac;
++
++	if (theNode->Accel > 0)
++		theNode->Accel = accel * (0.45f + 0.55f * gTouchSteerMagnitude);
++}
++#endif
++
++
+ /****************** CALC PLAYER KEY CONTROLS *********************/
+ //
+ // Converts keys to key control bits or reads the bit fields from the network.
+@@ -78,6 +162,22 @@ static KeyControlType KeysToControlBits(void)
+ {
+ 	KeyControlType bits = 0;					// init to 0
+ 
++#if __EMSCRIPTEN__
++	UpdateTouchSteering();
++	if (gTouchSteerActive)
++	{
++		// Translate the analog heading into the classic control bits so animations behave
++		// exactly like keyboard play; the actual turn amount is applied by ApplyTouchSteering.
++		float diff = WrapAngle(gTouchSteerHeading - gPlayerObj->Rot.y);
++		if (diff > TOUCH_TURN_DEADBAND)
++			bits |= KEYCONTROL_ROTLEFT;
++		else if (diff < -TOUCH_TURN_DEADBAND)
++			bits |= KEYCONTROL_ROTRIGHT;
++		if (cosf(diff) > 0.3f)
++			bits |= KEYCONTROL_FORWARD;
++	}
++#endif
++
+ 	if (GetNeedState(kNeed_TurnLeft))			// rot left
+ 		bits |= KEYCONTROL_ROTLEFT;
+ 	else if (GetNeedState(kNeed_TurnRight))		// rot right
+@@ -138,6 +238,9 @@ Byte		currentAnim;
+ 				
+ 	if (bits & KEYCONTROL_ROTLEFT)
+ 	{
++#if __EMSCRIPTEN__
++		if (!gTouchSteerActive)
++#endif
+ 		theNode->Rot.y += 2.0f*slugFactor*gFramesPerSecondFrac;				
+ 		
+ 			/* IF SLOW ENOUGH, THEN DO LEFT TURN ANIM */
+@@ -166,6 +269,9 @@ Byte		currentAnim;
+ 	else
+ 	if (bits & KEYCONTROL_ROTRIGHT)
+ 	{
++#if __EMSCRIPTEN__
++		if (!gTouchSteerActive)
++#endif
+ 		theNode->Rot.y -= 2.0f*slugFactor*gFramesPerSecondFrac;
+ 
+ 			/* IF SLOW ENOUGH, THEN DO RIGHT TURN ANIM */
+@@ -211,6 +317,10 @@ Byte		currentAnim;
+ 		theNode->Accel = (-PLAYER_WALK_ACCEL*slugFactor);
+ 	else
+ 		theNode->Accel = 0;
++
++#if __EMSCRIPTEN__
++	ApplyTouchSteering(theNode, slugFactor, theNode->Accel);
++#endif
+ 	
+ 	
+ 	
+@@ -300,7 +410,12 @@ KeyControlType	bits;
+ 	bits = gMyControlBits;											// get player control bits
+ 
+ 			/* SEE IF ROTATE PLAYER LEFT  */
+-				
++
++#if __EMSCRIPTEN__
++	if (gTouchSteerActive)
++		;	// handled by ApplyTouchSteering below
++	else
++#endif
+ 	if (bits & KEYCONTROL_ROTLEFT)
+ 		theNode->Rot.y += 2*gFramesPerSecondFrac;						
+ 	
+@@ -321,6 +436,10 @@ KeyControlType	bits;
+ 	else
+ 		theNode->Accel = 0;
+ 
++#if __EMSCRIPTEN__
++	ApplyTouchSteering(theNode, 0.8f, theNode->Accel);
++#endif
++
+ 
+ 			/* SEE IF CHANGE ATTACK MODE */
+ 
+diff --git a/src/QD3D/Renderer.c b/src/QD3D/Renderer.c
+index 6638f52..3c7ab65 100644
+--- a/src/QD3D/Renderer.c
++++ b/src/QD3D/Renderer.c
+@@ -439,6 +439,9 @@ void Render_SetViewport(TQ3Area pane)
+ 	}
+ 
+ 	glViewport(x,y,w,h);
++#if __EMSCRIPTEN__
++	Web_SetLastViewport(x, y, w, h);
++#endif
+ 
+ 	// Clear color & depth buffers
+ 	ClearColorRGBA(gState.viewportClearColor);
+diff --git a/src/Screens/HighScores.c b/src/Screens/HighScores.c
+index 4312de0..3d48e2f 100644
+--- a/src/Screens/HighScores.c
++++ b/src/Screens/HighScores.c
+@@ -71,6 +71,10 @@ TQ3Vector3D	camDelta = {0,0,0};
+ 			/* INIT */
+ 			
+ 	SetupHighScoresScreen();
++
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_HighScores);
++#endif
+ 	
+ 	MakeFadeEvent(true);
+ 	
+@@ -259,6 +263,10 @@ err:
+ 	FSWrite(refNum, &count, (Ptr)&gHighScores[0]);	
+ 	FSClose(refNum);			
+ 
++
++#if __EMSCRIPTEN__
++	Web_SyncPersistentStorage();
++#endif
+ }
+ 
+ 
+@@ -373,6 +381,11 @@ short		i;
+ 	QD3D_CalcFramesPerSecond();
+ 	SDL_StartTextInput(gSDLWindow);
+ 
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_NameEntry);
++	Web_BeginNameEntry(MAX_NAME_LENGTH);
++#endif
++
+ 	do
+ 	{
+ 		UpdateInput();
+@@ -386,6 +399,20 @@ short		i;
+ 			UpdateNameAndCursor(true,LEFT_EDGE,0,0);
+ 		}
+ 
++#if __EMSCRIPTEN__
++		{
++			int webCursor = gCursorPosition;
++			if (Web_ConsumeNameUpdate(gNewName.name, MAX_NAME_LENGTH, &webCursor))
++			{
++				gCursorPosition = webCursor;
++				PlayEffect(EFFECT_SELECT);
++				UpdateNameAndCursor(true,LEFT_EDGE,0,0);
++			}
++			if (Web_IsNameEntrySubmitted())
++				break;
++		}
++#endif
++
+ 				/* MOVE CAMERA */
+ 				
+ 		camWobble += gFramesPerSecondFrac;
+@@ -400,6 +427,10 @@ short		i;
+ 			/* CLEANUP */
+ 
+ 	SDL_StopTextInput(gSDLWindow);
++#if __EMSCRIPTEN__
++	Web_EndNameEntry();
++	Web_SetScreen(kWebScreen_HighScores);
++#endif
+ 	DeleteAllObjects();
+ }
+ 
+diff --git a/src/Screens/Infobar.c b/src/Screens/Infobar.c
+index 3d2129d..86eb6a7 100644
+--- a/src/Screens/Infobar.c
++++ b/src/Screens/Infobar.c
+@@ -167,6 +167,10 @@ void UpdateInfobar(void)
+ {
+ unsigned long	bits;
+ 
++#if __EMSCRIPTEN__
++	Web_UpdateGameplayHUD();
++#endif
++
+ 	bits = gInfobarUpdateBits;
+ 
+ 		/* SHOW ATTACK MODE */
+@@ -374,6 +378,11 @@ float	fluc = 0;
+ 
+ 	PauseAllChannels(true);
+ 
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_Paused);
++	Web_UpdateGameplayHUD();
++#endif
++
+ 			/***************/
+ 			/* MAKE RESUME */
+ 			/***************/
+@@ -432,6 +441,42 @@ float	fluc = 0;
+ 			selected = 0;
+ 			break;
+ 		}
++
++#if __EMSCRIPTEN__
++		{
++			int sel = selected;
++			bool resumeNow = false, quitNow = false;
++			Web_OnPauseLoopFrame(&sel, &resumeNow, &quitNow);
++			if (resumeNow || quitNow)
++			{
++				selected = sel;
++				break;
++			}
++
++			// Tap directly on the 3D "Resume" / "Quit" icons
++			float tx, ty;
++			if (Web_ConsumeTap(&tx, &ty))
++			{
++				float rx, ry, qx, qy;
++				bool okR = Web_WorldToWindow(resume->BaseTransformMatrix.value[3][0], resume->BaseTransformMatrix.value[3][1], resume->BaseTransformMatrix.value[3][2], &rx, &ry);
++				bool okQ = Web_WorldToWindow(quit->BaseTransformMatrix.value[3][0], quit->BaseTransformMatrix.value[3][1], quit->BaseTransformMatrix.value[3][2], &qx, &qy);
++				float dR = okR ? fabsf(ty - ry) : 1e9f;
++				float dQ = okQ ? fabsf(ty - qy) : 1e9f;
++				if (dR < dQ && dR < 0.2f)
++				{
++					selected = 0;
++					break;											// tap Resume: resume right away
++				}
++				else if (dQ <= dR && dQ < 0.2f)
++				{
++					if (selected == 1)
++						break;										// second tap on Quit: confirm
++					selected = 1;
++					PlayEffect(EFFECT_SELECT);
++				}
++			}
++		}
++#endif
+ 	
+ 				/* FLUCTUATE SELECTED */
+ 						
+diff --git a/src/Screens/MainMenu.c b/src/Screens/MainMenu.c
+index 504fc40..353fc4a 100644
+--- a/src/Screens/MainMenu.c
++++ b/src/Screens/MainMenu.c
+@@ -118,7 +118,13 @@ do_again:
+ 	if (gGamePrefs.mainMenuHelp)
+ 	{
+ 		int w;
++#if __EMSCRIPTEN__
++		const char*	s = Web_IsTouchMode()
++			? "Swipe or tap an icon to change the Selection.  Tap the front icon to make a Selection."
++			: "Use the Arrow Keys to change the Selection.  Press the Spacebar to make a Selection.";
++#else
+ 		const char*	s = "Use the Arrow Keys to change the Selection.  Press the Spacebar to make a Selection.";
++#endif
+ 		w = TextWidthC(s);
+ 		MoveTo(320-(w/2), 478);
+ 		ForeColor(whiteColor);
+@@ -142,6 +148,12 @@ do_again:
+ 
+ 	QD3D_CalcFramesPerSecond();
+ 
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_MainMenu);
++	Web_OnMainMenuSelection(gCurrentSelection);
++	int webSpinQueue = 0;
++#endif
++
+ 				/*************/
+ 				/* MAIN LOOP */
+ 				/*************/
+@@ -162,6 +174,51 @@ do_again:
+ 		if (GetNewNeedState(kNeed_UIConfirm))								// see if select
+ 			break;
+ 
++#if __EMSCRIPTEN__
++				/* TOUCH / MOUSE: TAP AN ICON, OR SWIPE TO SPIN */
++		{
++			float tx, ty;
++			if (Web_ConsumeTap(&tx, &ty))
++			{
++				int picked = Web_PickMainMenuIcon(tx, ty, NUM_MAINMENU_ICONS);
++				if (picked >= 0)
++				{
++					if (picked == gCurrentSelection && webSpinQueue == 0)
++						break;													// tapped the front icon: select it
++
++					// Spin the shortest way around to the tapped icon
++					int delta = PositiveModulo(picked - gCurrentSelection, NUM_MAINMENU_ICONS);
++					webSpinQueue = (delta <= NUM_MAINMENU_ICONS/2) ? delta : delta - NUM_MAINMENU_ICONS;
++				}
++			}
++
++			int swipe = Web_ConsumeSwipe();
++			if (swipe != 0 && webSpinQueue == 0)
++				webSpinQueue = swipe;
++
++			if (webSpinQueue > 0)
++			{
++				webSpinQueue--;
++				if (++gCurrentSelection >= NUM_MAINMENU_ICONS)
++					gCurrentSelection = 0;
++				SpinToNextMainMenuIcon();
++				Web_OnMainMenuSelection(gCurrentSelection);
++				continue;
++			}
++			else if (webSpinQueue < 0)
++			{
++				webSpinQueue++;
++				if (gCurrentSelection == 0)
++					gCurrentSelection = NUM_MAINMENU_ICONS-1;
++				else
++					gCurrentSelection--;
++				SpinToPreviousMainMenuIcon();
++				Web_OnMainMenuSelection(gCurrentSelection);
++				continue;
++			}
++		}
++#endif
++
+ 		if (GetNewNeedState(kNeed_UILeft))									// spin left
+ 		{
+ 			if (gCurrentSelection == 0)
+@@ -169,6 +226,9 @@ do_again:
+ 			else
+ 				gCurrentSelection--;
+ 			SpinToPreviousMainMenuIcon();
++#if __EMSCRIPTEN__
++			Web_OnMainMenuSelection(gCurrentSelection);
++#endif
+ 		}
+ 		else
+ 		if (GetNewNeedState(kNeed_UIRight))									// spin right
+@@ -176,6 +236,9 @@ do_again:
+ 			if (++gCurrentSelection >= NUM_MAINMENU_ICONS)
+ 				gCurrentSelection = 0;
+ 			SpinToNextMainMenuIcon();
++#if __EMSCRIPTEN__
++			Web_OnMainMenuSelection(gCurrentSelection);
++#endif
+ 		}
+ 	}while(true);
+ 
+@@ -210,8 +273,14 @@ do_again:
+ 				goto do_again;
+ 
+ 		case	3:							// quit
++#if __EMSCRIPTEN__
++				SavePrefs(&gGamePrefs);
++				Web_QuitToLauncher();		// there's no "quitting" a web page: park on the launcher screen
++				goto do_again;
++#else
+ 				CleanQuit();
+ 				return;
++#endif
+ 
+ 		case	4:							// high scores
+ 				ShowHighScoresScreen(0);
+diff --git a/src/Screens/Movie.cpp b/src/Screens/Movie.cpp
+index 4472d18..20c2628 100644
+--- a/src/Screens/Movie.cpp
++++ b/src/Screens/Movie.cpp
+@@ -31,6 +31,10 @@ void PlayAMovie(FSSpec* spec)
+ 
+ 	CinepakContext cinepak(movie.width, movie.height);
+ 
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_Movie);
++#endif
++
+ 	Render_InitState();
+ 	Render_AllocBackdrop(movie.width, movie.height);
+ 	Render_SetBackdropClearColor({0,0,0,1});
+diff --git a/src/Screens/SettingsScreen.c b/src/Screens/SettingsScreen.c
+index 5e0ec5b..1aaec6d 100644
+--- a/src/Screens/SettingsScreen.c
++++ b/src/Screens/SettingsScreen.c
+@@ -45,14 +45,40 @@ typedef struct SettingEntry
+ static void Callback_EnterControls(void);
+ static void Callback_Difficulty(void);
+ static void Callback_Music(void);
++#if !__EMSCRIPTEN__
+ static void Callback_Fullscreen(void);
+ static void Callback_VSync(void);
+ static void Callback_Antialiasing(void);
+ static void Callback_DebugInfo(void);
++#endif
+ static void Callback_Done(void);
+ 
+ static char gDisplayNameBuffers[MAX_CHOICES][64];
+ 
++#if __EMSCRIPTEN__
++// Web port: display/vsync/window options are owned by the browser shell
++static SettingEntry gSettingEntries[] =
++{
++	{nil							, "Configure Controls"	, Callback_EnterControls,	0,	{ NULL } },
++	{nil							, nil					, nil,						0,  { NULL } },
++	{&gGamePrefs.extreme			, "Game Difficulty"		, Callback_Difficulty,		2,	{ "EASY", "EXTREME!" } },
++	{nil							, nil					, nil,						0,  { NULL } },
++	{&gGamePrefs.music				, "Music"				, Callback_Music,			2,	{ "NO", "YES" }, },
++	{&gGamePrefs.ambientSounds		, "Ambient Sounds"		, nil,						2,	{ "NO", "YES" }, },
++	{nil							, nil					, nil,						0,  { NULL } },
++	{&gGamePrefs.hudStyle			, "HUD Style"			, nil,						2,	{ "COMPACT", "CLASSIC" }, },
++	{&gGamePrefs.force4x3			, "Aspect Ratio"		, NULL,						2,	{ "FILL SCREEN", "FORCE 4:3" }, },
++	{nil							, nil					, nil,						0,  { NULL } },
++	{&gGamePrefs.highQualityTextures, "Texture Filtering"	, nil,						2,	{ "NO", "YES" }, },
++	{&gGamePrefs.canDoFog			, "Fog"					, nil,						2,	{ "NO", "YES" }, },
++	{&gGamePrefs.whiteSky			, "Sky Color"			, nil,						2,	{ "BLACK", "WHITE" } },
++	{&gGamePrefs.nanosaurTeethFix	, "Nano's Dentist Is"	, nil,						2,	{ "EXTINCT", "ALIVE" } },
++	{nil							, nil					, nil,						0,  { NULL } },
++	{&gGamePrefs.mainMenuHelp		, "Show Help in Main Menu"		, nil,				2,	{ "NO", "YES" }, },
++	{nil							, nil					, nil,						0,  { NULL } },
++	{nil							, "Done"				, Callback_Done,			0,  { NULL } },
++};
++#else
+ static SettingEntry gSettingEntries[] =
+ {
+ 	{nil							, "Configure Controls"	, Callback_EnterControls,	0,	{ NULL } },
+@@ -80,6 +106,7 @@ static SettingEntry gSettingEntries[] =
+ 	{nil							, nil					, nil,						0,  { NULL } },
+ 	{nil							, "Done"				, Callback_Done,			0,  { NULL } },
+ };
++#endif
+ 
+ static const char* kInputNeedCaptions[NUM_CONTROL_NEEDS] =
+ {
+@@ -151,6 +178,7 @@ static void Callback_Music(void)
+ 		PlaySong(1, true);
+ }
+ 
++#if !__EMSCRIPTEN__
+ static void Callback_Fullscreen(void)
+ {
+ 	SetFullscreenMode(true);
+@@ -171,6 +199,7 @@ static void Callback_DebugInfo(void)
+ 	if (!gGamePrefs.debugInfoInTitleBar)
+ 		Callback_Difficulty();  // hack - this will set the window title
+ }
++#endif
+ 
+ static void Callback_Done(void)
+ {
+@@ -491,6 +520,9 @@ static void NavigateControlsPage(void)
+ 		{
+ 			SDL_memcpy(gGamePrefs.keys, kDefaultKeyBindings, sizeof(kDefaultKeyBindings));
+ 			_Static_assert(sizeof(kDefaultKeyBindings) == sizeof(gGamePrefs.keys), "size mismatch: default keybindings / prefs keybindings");
++#if __EMSCRIPTEN__
++			Web_ApplyPlatformDefaultKeys();
++#endif
+ 			PlayEffect_Parms(EFFECT_CRYSTAL, FULL_CHANNEL_VOLUME/2, kMiddleC-6);
+ 			needFullRender = true;
+ 		}
+@@ -525,6 +557,61 @@ static void NavigateControlsPage_AwaitingPress(void)
+ 	}
+ }
+ 
++#if __EMSCRIPTEN__
++// Mouse clicks / taps on the 640x480 settings pages (drawn letterboxed with keepAspectRatio)
++static void WebHandleSettingsTap(void)
++{
++	float nx, ny;
++	if (!Web_ConsumeTap(&nx, &ny))
++		return;
++
++	extern int gWindowWidth, gWindowHeight;
++	float W = (float) gWindowWidth, H = (float) gWindowHeight;
++	if (W < 1 || H < 1)
++		return;
++	TQ3Vector2D fit = FitRectKeepAR(GAME_VIEW_WIDTH, GAME_VIEW_HEIGHT, W, H);
++	float left = (W - fit.x) * 0.5f;
++	float top  = (H - fit.y) * 0.5f;
++	int px = (int) ((nx * W - left) / fit.x * GAME_VIEW_WIDTH);
++	int py = (int) ((ny * H - top) / fit.y * GAME_VIEW_HEIGHT);
++
++	if (gSettingsState == kSettingsState_MainPage)
++	{
++		int row = (py - 75) / 16;
++		if (py < 75 || row < 0 || row >= numSettingEntries || !gSettingEntries[row].label)
++			return;
++		selectedEntry = row;
++		Cycle(&gSettingEntries[row], 1);
++		PlayEffect(EFFECT_BLASTER);
++		needFullRender = true;
++	}
++	else if (gSettingsState == kSettingsState_ControlsPage)
++	{
++		int row = (py - 75) / 16;
++		if (py < 75) return;
++		if (row >= 0 && row < NUM_REMAPPABLE_NEEDS)
++		{
++			controlsHighlightedRow = row;
++			controlsHighlightedColumn = (px >= kColumnX[2]) ? 1 : 0;
++			gSettingsState = kSettingsState_ControlsPage_AwaitingPress;
++			needFullRender = true;
++		}
++		else if (row == NUM_REMAPPABLE_NEEDS + 1)
++		{
++			controlsHighlightedRow = kKeybindingRow_Reset;
++			SDL_memcpy(gGamePrefs.keys, kDefaultKeyBindings, sizeof(kDefaultKeyBindings));
++			Web_ApplyPlatformDefaultKeys();
++			PlayEffect_Parms(EFFECT_CRYSTAL, FULL_CHANNEL_VOLUME/2, kMiddleC-6);
++			needFullRender = true;
++		}
++		else if (row == NUM_REMAPPABLE_NEEDS + 2)
++		{
++			Callback_Done();
++		}
++	}
++}
++#endif
++
+ static void InitDisplayPref(void)
+ {
+ 	// Init display pref
+@@ -581,6 +668,15 @@ void DoSettingsScreen(void)
+ 	while (gSettingsState != kSettingsState_Off)
+ 	{
+ 		UpdateInput();
++
++#if __EMSCRIPTEN__
++		Web_SetScreen(gSettingsState == kSettingsState_MainPage || gSettingsState == kSettingsState_FadeIn
++				? kWebScreen_Settings : kWebScreen_Controls);
++		WebHandleSettingsTap();
++		if (Web_ConsumeSettingsDirty())
++			needFullRender = true;
++#endif
++
+ 		switch (gSettingsState)
+ 		{
+ 			case kSettingsState_FadeIn:
+diff --git a/src/Screens/Title.c b/src/Screens/Title.c
+index f71005a..bbc6701 100644
+--- a/src/Screens/Title.c
++++ b/src/Screens/Title.c
+@@ -51,6 +51,10 @@ TQ3Point3D		cameraFrom = { 110, 90, 190.0 };
+ 
+ 
+ 
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_Title);
++#endif
++
+ 			/* MAKE VIEW */
+ 
+ 	QD3D_NewViewDef(&viewDef);
+@@ -235,6 +239,10 @@ TQ3ColorRGB		c1 = { 1.0, 1, 1 };
+ TQ3ColorRGB		c2 = { 1, .9, .6 };
+ FSSpec			spec;
+ 
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_Logo);
++#endif
++
+ 			/* MAKE VIEW */
+ 
+ 	QD3D_NewViewDef(&viewDef);
+@@ -394,10 +402,22 @@ static void Slideshow(const struct SlideshowEntry* slides)
+ 
+ 			if (!promptShownYet && slideAge > 2)
+ 			{
++#if __EMSCRIPTEN__
++				if (Web_IsTouchMode())
++				{
++					MoveTo(640 - 4 - TextWidthC(" Tap to continue "), 480-4);
++					RGBBackColor2(0);
++					RGBForeColor2(0xFFFFFF);
++					DrawStringC(" Tap to continue ");
++				}
++				else
++#endif
++				{
+ 				MoveTo(494, 480-4);
+ 				RGBBackColor2(0);
+ 				RGBForeColor2(0xFFFFFF);
+ 				DrawStringC(" Hit SPACE to continue ");
++				}
+ 				promptShownYet = true;
+ 			}
+ 
+@@ -440,6 +460,9 @@ void ShowCharity(void)
+ {
+ 	const char* firstImage = PRO_MODE ? ":Images:Boot1Pro.tga" : ":Images:Boot1.tga";
+ 
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_Charity);
++#endif
+ 	const struct SlideshowEntry slides[] = {
+ 			{ firstImage, ShowCharity_SourcePortVersionOverlay },
+ 			{ ":Images:Boot2.tga", NULL },
+@@ -461,7 +484,11 @@ static void ShowHelp_TechInfoOverlay(void)
+ 	int x = 4;
+ 	int y = 480 - 4 - LH * 3;
+ 
++#if __EMSCRIPTEN__
++	MoveTo(x, y); DrawStringC(GAME_FULL_NAME " " GAME_VERSION " / Web port (WebAssembly + WebGL 2)");
++#else
+ 	MoveTo(x, y); DrawStringC(GAME_FULL_NAME " " GAME_VERSION " / "); DrawStringC(SDL_GetCurrentVideoDriver());
++#endif
+ 	y += LH; MoveTo(x, y); DrawStringC("SDL "); DrawStringC(SDL_GetRevision());
+ 	y += LH; MoveTo(x, y); DrawStringC("OpenGL "); DrawStringC((const char*) glGetString(GL_VERSION));
+ 	y += LH; MoveTo(x, y); DrawStringC((const char*) glGetString(GL_RENDERER));
+@@ -469,6 +496,9 @@ static void ShowHelp_TechInfoOverlay(void)
+ 
+ void ShowHelp(void)
+ {
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_Help);
++#endif
+ 	const struct SlideshowEntry slides[] = {
+ 			{ ":Images:Help1.tga", ShowHelp_TechInfoOverlay },
+ 			{ NULL, NULL },
+diff --git a/src/System/File.c b/src/System/File.c
+index f874898..b10e9d9 100644
+--- a/src/System/File.c
++++ b/src/System/File.c
+@@ -488,6 +488,10 @@ long				count;
+ 	count = sizeof(PrefsType);
+ 	FSWrite(refNum, &count, (Ptr)prefs);	
+ 	FSClose(refNum);
++
++#if __EMSCRIPTEN__
++	Web_SyncPersistentStorage();
++#endif
+ }
+ 
+ 
+diff --git a/src/System/Input.c b/src/System/Input.c
+index 51d36a6..9c1465f 100644
+--- a/src/System/Input.c
++++ b/src/System/Input.c
+@@ -217,7 +217,11 @@ void UpdateInput(void)
+ 
+ 		for (int i = 0; i < minNumKeys; i++)
+ 		{
++#if __EMSCRIPTEN__
++			UpdateKeyState(&gRawKeyboardState[i], keystate[i] || Web_GetVirtualScancode(i));
++#else
+ 			UpdateKeyState(&gRawKeyboardState[i], keystate[i]);
++#endif
+ 			if (gRawKeyboardState[i] == KEYSTATE_PRESSED)
+ 				gAnyNewKeysPressed = true;
+ 		}
+@@ -233,8 +237,12 @@ void UpdateInput(void)
+ 	if (GetNewSDLKeyState(SDL_SCANCODE_RETURN)
+ 		&& (GetSDLKeyState(SDL_SCANCODE_LALT) || GetSDLKeyState(SDL_SCANCODE_RALT)))
+ 	{
++#if __EMSCRIPTEN__
++		Web_ToggleFullscreen();
++#else
+ 		gGamePrefs.fullscreen = gGamePrefs.fullscreen ? 0 : 1;
+ 		SetFullscreenMode(false);
++#endif
+ 
+ 		gRawKeyboardState[SDL_SCANCODE_RETURN] = KEYSTATE_IGNOREHELD;
+ 	}
+@@ -283,8 +291,16 @@ void UpdateInput(void)
+ 			}
+ 		}
+ 
++#if __EMSCRIPTEN__
++		downNow |= Web_GetVirtualNeed(i);
++#endif
++
+ 		UpdateKeyState(&gNeedStates[i], downNow);
+ 	}
++
++#if __EMSCRIPTEN__
++	Web_EndInputFrame();
++#endif
+ }
+ 
+ 
+diff --git a/src/System/Main.c b/src/System/Main.c
+index 84bc536..e2ba7cd 100644
+--- a/src/System/Main.c
++++ b/src/System/Main.c
+@@ -66,7 +66,16 @@ void InitDefaultPrefs(void)
+ 	gGamePrefs.nanosaurTeethFix = true;
+ 	gGamePrefs.whiteSky = true;
+ 
++#if __EMSCRIPTEN__
++	gGamePrefs.fullscreen = false;					// the browser shell owns fullscreen
++	gGamePrefs.vsync = true;
++	gGamePrefs.hudStyle = kWebHUD_Compact;
++#endif
++
+ 	SDL_memcpy(gGamePrefs.keys, kDefaultKeyBindings, sizeof(gGamePrefs.keys));
++#if __EMSCRIPTEN__
++	Web_ApplyPlatformDefaultKeys();
++#endif
+ 	_Static_assert(sizeof(kDefaultKeyBindings) == sizeof(gGamePrefs.keys), "size mismatch: default keybindings / prefs keybinings");
+ }
+ 
+@@ -134,10 +143,15 @@ TQ3ColorRGB		c2 = { 1, .9, .6 };
+ 	viewDef.view.paneClip.bottom 	+= 140;  
+ 	viewDef.lights.ambientBrightness = 0.3;
+ #else	
++#if __EMSCRIPTEN__
++	if (gGamePrefs.hudStyle == kWebHUD_Classic)		// compact HUD: 3D view fills the whole screen
++#endif
++	{
+ 	viewDef.view.paneClip.left 		+= 118;  
+ 	viewDef.view.paneClip.right 	+= 12;  
+ 	viewDef.view.paneClip.top		+= 9;  
+ 	viewDef.view.paneClip.bottom 	+= 110;  
++	}
+ 	viewDef.lights.ambientBrightness = 0.2;
+ #endif	
+ 	viewDef.camera.hither 			= HITHER_DISTANCE;
+@@ -238,7 +252,10 @@ FSSpec	spec;
+ 
+ 	MakeFadeEvent(true);
+ 	QD3D_CalcFramesPerSecond();
+-		
++
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_Game);
++#endif
+ 
+ 		/******************/
+ 		/* MAIN GAME LOOP */
+@@ -278,6 +295,9 @@ FSSpec	spec;
+ 			|| IsCmdQPressed())
+ 		{
+ 			DoPaused();
++#if __EMSCRIPTEN__
++			Web_SetScreen(gGameOverFlag ? kWebScreen_Movie : kWebScreen_Game);
++#endif
+ 		}
+ 
+ 
+@@ -325,6 +345,9 @@ FSSpec	spec;
+ 	}
+ 
+ 			/* CLEANUP */
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_Movie);
++#endif
+ 	CleanupLevel();
+ 
+ 
+@@ -349,6 +372,9 @@ FSSpec	spec;
+ 	if (!gSongPlayingFlag)						// make sure music is going
+ 		PlaySong(1,true);		
+ 		
++#if __EMSCRIPTEN__
++	Web_SetScreen(kWebScreen_HighScores);
++#endif
+ 	ShowHighScoresScreen(gScore);
+ }
+ 
+diff --git a/src/System/Misc.c b/src/System/Misc.c
+index f1d7a20..712d496 100644
+--- a/src/System/Misc.c
++++ b/src/System/Misc.c
+@@ -11,6 +11,10 @@
+ 
+ #include "game.h"
+ 
++#if __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
++
+ 
+ /****************************/
+ /*    CONSTANTS             */
+@@ -56,6 +60,10 @@ Str255		numStr;
+ void DoAlert(const char* s)
+ {
+ 	SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Game Alert: %s", s);
++#if __EMSCRIPTEN__
++	Web_ShowAlert(s, false);
++	return;
++#endif
+ 	Enter2D();
+ 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, GAME_FULL_NAME, s, NULL);
+ 	Exit2D();
+@@ -68,6 +76,9 @@ void DoAssert(const char* msg, const char* file, int line)
+ 	SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Game Assertion Failed: %s - %s:%d", msg, file, line);
+ 	static char alertbuf[1024];
+ 	SDL_snprintf(alertbuf, 1024, "%s\n%s:%d", msg, file, line);
++#if __EMSCRIPTEN__
++	Web_ShowAlert(alertbuf, true);
++#endif
+ 	Enter2D();
+ 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GAME_FULL_NAME ": Assertion Failed!", alertbuf, NULL);
+ 	ExitToShell();
+@@ -78,6 +89,9 @@ void DoAssert(const char* msg, const char* file, int line)
+ void DoFatalAlert(const char* s)
+ {
+ 	SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Game Fatal Alert: %s", s);
++#if __EMSCRIPTEN__
++	Web_ShowAlert(s, true);
++#endif
+ 	Enter2D();
+ 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GAME_FULL_NAME ": Fatal Alert", s, NULL);
+ 	CleanQuit();
+@@ -90,6 +104,9 @@ void DoFatalAlert2(const char* s1, const char* s2)
+ 	static char alertbuf[1024];
+ 	SDL_snprintf(alertbuf, 1024, "%s\n%s", s1, s2);
+ 	SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Game Fatal Alert: %s", alertbuf);
++#if __EMSCRIPTEN__
++	Web_ShowAlert(alertbuf, true);
++#endif
+ 	Enter2D();
+ 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GAME_FULL_NAME ": Fatal Alert", alertbuf, NULL);
+ 	ExitToShell();
+@@ -102,6 +119,15 @@ void CleanQuit(void)
+ {
+ static	Boolean beenHere = false;
+ 
++#if __EMSCRIPTEN__
++	// A web page can't quit; save and park on the launcher, then reload for a clean restart.
++	SavePrefs(&gGamePrefs);
++	StopAllEffectChannels();
++	Web_QuitToLauncher();
++	EM_ASM({ location.reload(); });
++	for (;;) Web_SwapWindow(NULL);
++#endif
++
+ 	if (!beenHere)
+ 	{
+ 		beenHere = true;
+diff --git a/src/System/Window.c b/src/System/Window.c
+index 9a77264..9a0d871 100644
+--- a/src/System/Window.c
++++ b/src/System/Window.c
+@@ -121,7 +121,7 @@ void Enter2D(void)
+ {
+ 	// Linux: work around game window sent to background after showing a dialog box
+ 	// Windows: work around alert box appearing behind game
+-#if !__APPLE__
++#if !__APPLE__ && !__EMSCRIPTEN__
+ 	if (gSDLWindow)
+ 	{
+ 		SDL_SetWindowFullscreen(gSDLWindow, false);
+@@ -136,7 +136,7 @@ void Enter2D(void)
+ 
+ void Exit2D(void)
+ {
+-#if !__APPLE__
++#if !__APPLE__ && !__EMSCRIPTEN__
+ 	if (gSDLWindow)
+ 	{
+ 		SDL_PumpEvents();
+@@ -228,6 +228,13 @@ void MoveToPreferredDisplay(void)
+ 
+ void SetFullscreenMode(bool enforceDisplayPref)
+ {
++#if __EMSCRIPTEN__
++	// The browser shell owns fullscreen (it needs a user gesture and must include the HTML overlays)
++	(void) enforceDisplayPref;
++	QD3D_OnWindowResized();
++	return;
++#endif
++
+ 	if (!gGamePrefs.fullscreen)
+ 	{
+ 		SDL_SetWindowFullscreen(gSDLWindow, 0);
+diff --git a/src/Web/Web.h b/src/Web/Web.h
+new file mode 100644
+index 0000000..662052c
+--- /dev/null
++++ b/src/Web/Web.h
+@@ -0,0 +1,89 @@
++// WEB.H
++// Interface between the game code and the browser shell (Emscripten build only).
++
++#pragma once
++
++#if __EMSCRIPTEN__
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++enum
++{
++	kWebScreen_Boot = 0,
++	kWebScreen_Logo,
++	kWebScreen_Charity,
++	kWebScreen_Title,
++	kWebScreen_MainMenu,
++	kWebScreen_Settings,
++	kWebScreen_Help,
++	kWebScreen_HighScores,
++	kWebScreen_NameEntry,
++	kWebScreen_Game,
++	kWebScreen_Paused,
++	kWebScreen_Movie,
++	kWebScreen_Exited,
++	kWebScreen_Controls,
++};
++
++enum
++{
++	kWebHUD_Compact = 0,
++	kWebHUD_Classic = 1,
++};
++
++// Lifecycle
++void	Web_InitPersistentStorage(void);		// mounts IDBFS & loads saved files (blocks via Asyncify)
++void	Web_SyncPersistentStorage(void);		// flushes saved files to IndexedDB (async, debounced)
++void	Web_OnBootComplete(void);
++
++// Screen state reported to the shell (controls which touch overlay is shown)
++void	Web_SetScreen(int screen);
++int		Web_GetScreen(void);
++
++// Input bridge (consumed by Input.c / Player_Control.c)
++bool	Web_GetVirtualNeed(int needID);
++bool	Web_GetVirtualScancode(int scancode);
++void	Web_EndInputFrame(void);
++bool	Web_IsTouchMode(void);
++bool	Web_GetStick(float* outX, float* outY);	// returns true if the touch stick is being held
++bool	Web_ConsumeTap(float* nx, float* ny);	// normalized window coords [0..1], origin top-left
++int		Web_ConsumeSwipe(void);					// -1 = left, +1 = right, 0 = none
++
++// Gameplay helpers
++void	Web_UpdateGameplayHUD(void);			// pushes HUD state to the shell when it changes
++bool	Web_IsPickupNearby(void);
++void	Web_OnPauseLoopFrame(int* selected, bool* resumeNow, bool* quitNow);
++
++// Main menu
++void	Web_OnMainMenuSelection(int selection);
++int		Web_PickMainMenuIcon(float nx, float ny, int numIcons);	// -1 if none
++
++// Projection helper: world coords -> normalized window coords
++bool	Web_WorldToWindow(float x, float y, float z, float* nx, float* ny);
++void	Web_SetLastViewport(int x, int y, int w, int h);
++
++// High score name entry
++void	Web_BeginNameEntry(int maxLength);
++bool	Web_ConsumeNameUpdate(char* nameBuf, int maxLength, int* cursorPos);
++bool	Web_IsNameEntrySubmitted(void);
++void	Web_EndNameEntry(void);
++
++// Fullscreen / quit / alerts
++void	Web_ToggleFullscreen(void);
++void	Web_QuitToLauncher(void);				// blocks (yielding frames) until the shell resumes
++void	Web_ShowAlert(const char* message, bool fatal);
++void	Web_PrefsChanged(void);
++void	Web_ApplyPlatformDefaultKeys(void);	// Mac browsers get the original Mac bindings (Cmd = jump, Option = pick up)
++void	Web_ApplyHUDStyleLive(void);
++bool	Web_ConsumeSettingsDirty(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git a/src/Web/WebBridge.c b/src/Web/WebBridge.c
+new file mode 100644
+index 0000000..47bb52e
+--- /dev/null
++++ b/src/Web/WebBridge.c
+@@ -0,0 +1,748 @@
++// WEBBRIDGE.C
++// Glue between Nanosaur and the browser shell: frame pacing, persistent storage,
++// virtual (touch) input, HUD export and assorted screen hooks.
++
++#include "game.h"
++#include "Web.h"
++
++#include <emscripten.h>
++#include <string.h>
++#include <math.h>
++
++extern int gWindowWidth;
++extern int gWindowHeight;
++extern TQ3Matrix4x4 gCameraWorldToFrustumMatrix;
++extern float gTimeRemaining;
++extern uint32_t gScore;
++extern short gNumLives;
++extern short gRecoveredEggs[];
++extern Byte gCurrentSelection;
++extern uint32_t gInfobarUpdateBits;
++
++/****************************/
++/*    JS IMPORTS            */
++/****************************/
++
++EM_JS(void, js_event_i, (const char* type, int a, int b), {
++	if (Module.nanoEvent) Module.nanoEvent(UTF8ToString(type), a, b);
++});
++
++EM_JS(void, js_event_s, (const char* type, const char* s, int a), {
++	if (Module.nanoEvent) Module.nanoEvent(UTF8ToString(type), UTF8ToString(s), a);
++});
++
++EM_JS(void, js_hud, (int time, int score, int health, int lives, int weapon, int ammo,
++					 int fuelFrame, int eggs, int flags, int weaponMask), {
++	if (Module.nanoHUD) Module.nanoHUD(time, score, health, lives, weapon, ammo, fuelFrame, eggs, flags, weaponMask);
++});
++
++EM_ASYNC_JS(void, js_wait_frame, (), {
++	await new Promise((resolve) => {
++		if (Module.nanoWaitFrame) Module.nanoWaitFrame(resolve);
++		else requestAnimationFrame(() => resolve());
++	});
++});
++
++EM_ASYNC_JS(void, js_mount_persist, (), {
++	try { FS.mkdir('/persist'); } catch (e) {}
++	try { FS.mount(IDBFS, { autoPersist: false }, '/persist'); } catch (e) { console.warn('IDBFS mount failed', e); }
++	await new Promise((resolve) => {
++		try { FS.syncfs(true, (err) => { if (err) console.warn('IDBFS load failed', err); resolve(); }); }
++		catch (e) { console.warn(e); resolve(); }
++	});
++});
++
++EM_JS(void, js_sync_persist, (), {
++	if (Module.__nanoSyncTimer) clearTimeout(Module.__nanoSyncTimer);
++	Module.__nanoSyncTimer = setTimeout(() => {
++		Module.__nanoSyncTimer = 0;
++		try { FS.syncfs(false, (err) => { if (err) console.warn('IDBFS save failed', err); }); } catch (e) {}
++	}, 150);
++});
++
++/****************************/
++/*    STATE                 */
++/****************************/
++
++static int		gWebScreen = kWebScreen_Boot;
++static uint8_t	gVirtualNeedHeld[NUM_CONTROL_NEEDS];
++static uint8_t	gVirtualNeedPulse[NUM_CONTROL_NEEDS];
++static uint8_t	gVirtualScancodePulse[SDL_SCANCODE_COUNT];
++static bool		gTouchMode = false;
++
++static bool		gStickActive = false;
++static float	gStickX = 0, gStickY = 0;
++
++static bool		gTapPending = false;
++static float	gTapX = 0, gTapY = 0;
++static int		gSwipePending = 0;
++
++static int		gViewport[4] = {0, 0, 640, 480};
++
++static bool		gNameEntryActive = false;
++static bool		gNameDirty = false;
++static bool		gNameSubmitted = false;
++static char		gNameBuffer[64];
++
++static bool		gSettingsDirty = false;
++static int		gPauseChoice = 0;		// 1 = resume, 2 = quit
++static bool		gResumeFromQuit = false;
++
++/****************************/
++/*    FRAME PACING          */
++/****************************/
++
++bool Web_SwapWindow(SDL_Window* window)
++{
++	(void) window;
++	js_wait_frame();
++	return true;
++}
++
++bool Web_SetSwapInterval(int interval)
++{
++	(void) interval;
++	return true;
++}
++
++/****************************/
++/*    STORAGE               */
++/****************************/
++
++void Web_InitPersistentStorage(void)
++{
++	SDL_setenv_unsafe("XDG_CONFIG_HOME", "/persist", 1);
++	js_mount_persist();
++}
++
++void Web_SyncPersistentStorage(void)
++{
++	js_sync_persist();
++}
++
++void Web_OnBootComplete(void)
++{
++	js_event_i("ready", 0, 0);
++}
++
++/****************************/
++/*    SCREENS               */
++/****************************/
++
++void Web_SetScreen(int screen)
++{
++	if (screen == gWebScreen)
++		return;
++	gWebScreen = screen;
++
++	// Drop stale one-shot input when switching screens
++	gTapPending = false;
++	gSwipePending = 0;
++	SDL_memset(gVirtualNeedPulse, 0, sizeof(gVirtualNeedPulse));
++
++	js_event_i("screen", screen, 0);
++}
++
++int Web_GetScreen(void)
++{
++	return gWebScreen;
++}
++
++/****************************/
++/*    INPUT                 */
++/****************************/
++
++bool Web_GetVirtualNeed(int needID)
++{
++	if (needID < 0 || needID >= NUM_CONTROL_NEEDS)
++		return false;
++	return gVirtualNeedHeld[needID] || gVirtualNeedPulse[needID];
++}
++
++bool Web_GetVirtualScancode(int scancode)
++{
++	if (scancode < 0 || scancode >= SDL_SCANCODE_COUNT)
++		return false;
++	return gVirtualScancodePulse[scancode] != 0;
++}
++
++void Web_EndInputFrame(void)
++{
++	for (int i = 0; i < NUM_CONTROL_NEEDS; i++)
++		if (gVirtualNeedPulse[i])
++			gVirtualNeedPulse[i]--;
++
++	for (int i = 0; i < SDL_SCANCODE_COUNT; i++)
++		if (gVirtualScancodePulse[i])
++			gVirtualScancodePulse[i]--;
++}
++
++bool Web_IsTouchMode(void)
++{
++	return gTouchMode;
++}
++
++bool Web_GetStick(float* outX, float* outY)
++{
++	if (outX) *outX = gStickX;
++	if (outY) *outY = gStickY;
++	return gStickActive;
++}
++
++bool Web_ConsumeTap(float* nx, float* ny)
++{
++	if (!gTapPending)
++		return false;
++	gTapPending = false;
++	if (nx) *nx = gTapX;
++	if (ny) *ny = gTapY;
++	return true;
++}
++
++int Web_ConsumeSwipe(void)
++{
++	int s = gSwipePending;
++	gSwipePending = 0;
++	return s;
++}
++
++/****************************/
++/*    PROJECTION            */
++/****************************/
++
++void Web_SetLastViewport(int x, int y, int w, int h)
++{
++	gViewport[0] = x; gViewport[1] = y; gViewport[2] = w; gViewport[3] = h;
++}
++
++bool Web_WorldToWindow(float x, float y, float z, float* nx, float* ny)
++{
++	const TQ3Matrix4x4* m = &gCameraWorldToFrustumMatrix;
++	// QD3D row-vector convention: p' = p * M
++	float cx = x*m->value[0][0] + y*m->value[1][0] + z*m->value[2][0] + m->value[3][0];
++	float cy = x*m->value[0][1] + y*m->value[1][1] + z*m->value[2][1] + m->value[3][1];
++	float cw = x*m->value[0][3] + y*m->value[1][3] + z*m->value[2][3] + m->value[3][3];
++	if (cw <= 0.0001f)
++		return false;
++	float ndcX = cx / cw;
++	float ndcY = cy / cw;
++
++	// Viewport is in GL coords (origin bottom-left)
++	float px = gViewport[0] + (ndcX * 0.5f + 0.5f) * gViewport[2];
++	float pyGL = gViewport[1] + (ndcY * 0.5f + 0.5f) * gViewport[3];
++	float py = gWindowHeight - pyGL;
++
++	if (nx) *nx = px / (float) (gWindowWidth > 0 ? gWindowWidth : 1);
++	if (ny) *ny = py / (float) (gWindowHeight > 0 ? gWindowHeight : 1);
++	return true;
++}
++
++/****************************/
++/*    MAIN MENU             */
++/****************************/
++
++extern ObjNode* gMainMenuIcons[];
++
++void Web_OnMainMenuSelection(int selection)
++{
++	js_event_i("menusel", selection, 0);
++}
++
++int Web_PickMainMenuIcon(float nx, float ny, int numIcons)
++{
++	int best = -1;
++	float bestDist = 1e9f;
++	float aspect = gWindowHeight > 0 ? (float) gWindowWidth / gWindowHeight : 1.333f;
++
++	for (int i = 0; i < numIcons; i++)
++	{
++		ObjNode* icon = gMainMenuIcons[i];
++		if (!icon)
++			continue;
++		float ix, iy;
++		if (!Web_WorldToWindow(icon->Coord.x, icon->Coord.y + 30.0f, icon->Coord.z, &ix, &iy))
++			continue;
++		float dx = (ix - nx) * aspect;
++		float dy = (iy - ny);
++		float d = sqrtf(dx*dx + dy*dy);
++		if (d < bestDist)
++		{
++			bestDist = d;
++			best = i;
++		}
++	}
++
++	if (bestDist > 0.30f)		// generous radius (in screen-height units)
++		return -1;
++	return best;
++}
++
++/****************************/
++/*    GAMEPLAY HUD          */
++/****************************/
++
++bool Web_IsPickupNearby(void)
++{
++	if (!gPlayerObj || !gFirstNodePtr || !gPlayerObj->Skeleton)
++		return false;
++
++	if (gPlayerObj->StatusBits & STATUS_BIT_ISCARRYING)
++		return false;
++
++	static const TQ3Point3D inPoint = {0, 0, -30};
++	TQ3Point3D mouth;
++	FindCoordOnJoint(gPlayerObj, MYGUY_LIMB_HEAD, &inPoint, &mouth);
++
++	ObjNode* node = gFirstNodePtr;
++	while (node)
++	{
++		if (node->Slot >= SLOT_OF_DUMB)
++			break;
++
++		if ((node->CType & CTYPE_PICKUP)
++			&& !(node->StatusBits & STATUS_BIT_NOCOLLISION)
++			&& node->CBits)
++		{
++			float d = CalcQuickDistance(mouth.x, mouth.z, node->Coord.x, node->Coord.z);
++			if (d <= node->PickUpCollisionRadius + 70.0f
++				&& fabsf(node->Coord.y - gPlayerObj->Coord.y) < 250.0f)
++			{
++				return true;
++			}
++		}
++		node = node->NextNode;
++	}
++	return false;
++}
++
++void Web_UpdateGameplayHUD(void)
++{
++	static int last[10];
++	static bool primed = false;
++
++	int cur[10];
++	cur[0] = (int) gTimeRemaining;
++	cur[1] = (int) gScore;
++	cur[2] = (int) (SDL_clamp(gMyHealth, 0.0f, 1.0f) * 1000.0f);
++	cur[3] = gNumLives;
++	cur[4] = gCurrentAttackMode;
++	cur[5] = gWeaponInventory[gCurrentAttackMode];
++	cur[6] = INFOBAR_FRAMENUM_FUELGAUGE + (int) (MAX_FUEL_CAPACITY - gFuel);
++
++	int eggs = 0;
++	for (int i = 0; i < NUM_EGG_SPECIES; i++)
++		if (gRecoveredEggs[i])
++			eggs |= 1 << i;
++	cur[7] = eggs;
++
++	int flags = 0;
++	if (gPlayerObj)
++	{
++		if (gPlayerObj->StatusBits & STATUS_BIT_ISCARRYING)	flags |= 1 << 0;
++		if (Web_IsPickupNearby())							flags |= 1 << 1;
++		if (gPlayerObj->JetThrust)							flags |= 1 << 2;
++		if (gPlayerObj->StatusBits & STATUS_BIT_ONGROUND)	flags |= 1 << 3;
++	}
++	if (gFuel > 0.0f)				flags |= 1 << 4;
++	if (gPlayerGotKilledFlag)		flags |= 1 << 5;
++	if (gTimeRemaining < 30.0f)		flags |= 1 << 6;
++	if (gGamePrefs.hudStyle == kWebHUD_Classic)	flags |= 1 << 7;
++	if (gGamePaused)				flags |= 1 << 8;
++	cur[8] = flags;
++
++	int weaponMask = 0;
++	for (int i = 0; i < NUM_ATTACK_MODES; i++)
++		if (gPossibleAttackModes[i])
++			weaponMask |= 1 << i;
++	cur[9] = weaponMask;
++
++	if (!primed || SDL_memcmp(cur, last, sizeof(cur)) != 0)
++	{
++		SDL_memcpy(last, cur, sizeof(cur));
++		primed = true;
++		js_hud(cur[0], cur[1], cur[2], cur[3], cur[4], cur[5], cur[6], cur[7], cur[8], cur[9]);
++	}
++}
++
++void Web_OnPauseLoopFrame(int* selected, bool* resumeNow, bool* quitNow)
++{
++	*resumeNow = false;
++	*quitNow = false;
++
++	if (gPauseChoice == 1)
++	{
++		*selected = 0;
++		*resumeNow = true;
++	}
++	else if (gPauseChoice == 2)
++	{
++		*selected = 1;
++		*quitNow = true;
++	}
++	gPauseChoice = 0;
++}
++
++/****************************/
++/*    NAME ENTRY            */
++/****************************/
++
++void Web_BeginNameEntry(int maxLength)
++{
++	gNameEntryActive = true;
++	gNameDirty = false;
++	gNameSubmitted = false;
++	gNameBuffer[0] = '\0';
++	js_event_i("nameentry", 1, maxLength);
++}
++
++bool Web_ConsumeNameUpdate(char* nameBuf, int maxLength, int* cursorPos)
++{
++	if (!gNameDirty)
++		return false;
++	gNameDirty = false;
++
++	int len = (int) SDL_strlen(gNameBuffer);
++	if (len > maxLength) len = maxLength;
++	for (int i = 0; i < maxLength; i++)
++		nameBuf[i] = (i < len) ? gNameBuffer[i] : ' ';
++	*cursorPos = len < maxLength ? len : maxLength - 1;
++	return true;
++}
++
++bool Web_IsNameEntrySubmitted(void)
++{
++	return gNameSubmitted;
++}
++
++void Web_EndNameEntry(void)
++{
++	gNameEntryActive = false;
++	gNameSubmitted = false;
++	js_event_i("nameentry", 0, 0);
++}
++
++/****************************/
++/*    MISC                  */
++/****************************/
++
++EM_JS(int, js_is_mac, (), {
++	const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
++	return /mac/i.test(p) && !(navigator.maxTouchPoints > 1) ? 1 : 0;
++});
++
++void Web_ApplyPlatformDefaultKeys(void)
++{
++	// The compiled-in defaults are the PC layout (Alt = jump, Ctrl = pick up). On a Mac the
++	// original game used Command to jump and Option to pick things up, so restore those.
++	if (!js_is_mac())
++		return;
++	gGamePrefs.keys[kNeed_Jump].key[0]		= SDL_SCANCODE_LGUI;
++	gGamePrefs.keys[kNeed_Jump].key[1]		= SDL_SCANCODE_RGUI;
++	gGamePrefs.keys[kNeed_PickUp].key[0]	= SDL_SCANCODE_LALT;
++	gGamePrefs.keys[kNeed_PickUp].key[1]	= SDL_SCANCODE_RALT;
++}
++
++bool Web_ConsumeSettingsDirty(void)
++{
++	bool d = gSettingsDirty;
++	gSettingsDirty = false;
++	return d;
++}
++
++void Web_ApplyHUDStyleLive(void)
++{
++	// Switch between the compact overlay HUD and the classic frame in the middle of a level
++	if (!gGameViewInfoPtr || !gTerrainPtr)
++		return;
++
++	Rect pane = {0, 0, 0, 0};
++	if (gGamePrefs.hudStyle == kWebHUD_Classic)
++	{
++		pane.left	= 118;
++		pane.right	= 12;
++		pane.top	= 9;
++		pane.bottom	= 110;
++	}
++	gGameViewInfoPtr->paneClip = pane;
++	gGameViewInfoPtr->needScissorTest = pane.left != 0 || pane.right != 0 || pane.top != 0 || pane.bottom != 0;
++	gInfobarUpdateBits = 0xFFFFFFFF;
++}
++
++void Web_ToggleFullscreen(void)
++{
++	js_event_i("fullscreen", -1, 0);
++}
++
++void Web_QuitToLauncher(void)
++{
++	gResumeFromQuit = false;
++	Web_SetScreen(kWebScreen_Exited);
++	js_event_i("quit", 0, 0);
++	while (!gResumeFromQuit)
++	{
++		js_wait_frame();
++	}
++	gResumeFromQuit = false;
++}
++
++void Web_ShowAlert(const char* message, bool fatal)
++{
++	js_event_s(fatal ? "fatal" : "alert", message ? message : "", 0);
++	if (fatal)
++	{
++		for (;;) js_wait_frame();		// halt the game; the shell shows a reload prompt
++	}
++}
++
++void Web_PrefsChanged(void)
++{
++	js_event_i("prefs", 0, 0);
++}
++
++/****************************/
++/*    EXPORTS (JS -> C)     */
++/****************************/
++
++EMSCRIPTEN_KEEPALIVE void Web_SetVirtualNeed(int needID, int state)
++{
++	if (needID < 0 || needID >= NUM_CONTROL_NEEDS)
++		return;
++	switch (state)
++	{
++		case 0:	gVirtualNeedHeld[needID] = 0; break;
++		case 1:	gVirtualNeedHeld[needID] = 1; break;
++		default: gVirtualNeedPulse[needID] = 2; break;		// press for 2 input polls
++	}
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_PulseScancode(int scancode)
++{
++	if (scancode > 0 && scancode < SDL_SCANCODE_COUNT)
++		gVirtualScancodePulse[scancode] = 2;
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_SetStick(float x, float y, int active)
++{
++	gStickX = x;
++	gStickY = y;
++	gStickActive = active != 0;
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_SetTouchMode(int on)
++{
++	gTouchMode = on != 0;
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_TapAt(float nx, float ny)
++{
++	switch (gWebScreen)
++	{
++		case kWebScreen_Game:
++			// Tap = pick up / throw, but only when it would do something
++			if (gPlayerObj && ((gPlayerObj->StatusBits & STATUS_BIT_ISCARRYING) || Web_IsPickupNearby()))
++				Web_SetVirtualNeed(kNeed_PickUp, 2);
++			break;
++
++		case kWebScreen_MainMenu:
++		case kWebScreen_Paused:
++		case kWebScreen_Settings:
++		case kWebScreen_Controls:
++			gTapX = nx;
++			gTapY = ny;
++			gTapPending = true;
++			break;
++
++		case kWebScreen_Logo:
++		case kWebScreen_Charity:
++		case kWebScreen_Title:
++		case kWebScreen_Help:
++		case kWebScreen_HighScores:
++		case kWebScreen_Movie:
++			Web_SetVirtualNeed(kNeed_UIConfirm, 2);
++			break;
++
++		default:
++			break;
++	}
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_Swipe(int dir)
++{
++	if (gWebScreen == kWebScreen_MainMenu)
++		gSwipePending = dir;
++	else if (gWebScreen == kWebScreen_Paused)
++		Web_SetVirtualNeed(dir < 0 ? kNeed_UIUp : kNeed_UIDown, 2);
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_PauseChoice(int choice)
++{
++	gPauseChoice = choice;
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_SetHighScoreName(const char* name, int submit)
++{
++	if (!gNameEntryActive)
++		return;
++	SDL_strlcpy(gNameBuffer, name ? name : "", sizeof(gNameBuffer));
++	gNameDirty = true;
++	if (submit)
++		gNameSubmitted = true;
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_ResumeFromQuit(void)
++{
++	gResumeFromQuit = true;
++}
++
++// --- Key bindings ---
++
++EMSCRIPTEN_KEEPALIVE int Web_GetKeyBinding(int needID, int slot)
++{
++	if (needID < 0 || needID >= NUM_REMAPPABLE_NEEDS || slot < 0 || slot >= KEYBINDING_MAX_KEYS)
++		return 0;
++	return gGamePrefs.keys[needID].key[slot];
++}
++
++EMSCRIPTEN_KEEPALIVE int Web_GetDefaultKeyBinding(int needID, int slot)
++{
++	if (needID < 0 || needID >= NUM_REMAPPABLE_NEEDS || slot < 0 || slot >= KEYBINDING_MAX_KEYS)
++		return 0;
++	if (js_is_mac() && (needID == kNeed_Jump || needID == kNeed_PickUp))
++	{
++		static const int16_t mac[2][2] = { {SDL_SCANCODE_LGUI, SDL_SCANCODE_RGUI}, {SDL_SCANCODE_LALT, SDL_SCANCODE_RALT} };
++		return mac[needID == kNeed_Jump ? 0 : 1][slot];
++	}
++	return kDefaultKeyBindings[needID].key[slot];
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_SetKeyBinding(int needID, int slot, int scancode)
++{
++	if (needID < 0 || needID >= NUM_REMAPPABLE_NEEDS || slot < 0 || slot >= KEYBINDING_MAX_KEYS)
++		return;
++	if (scancode < 0 || scancode >= SDL_SCANCODE_COUNT)
++		return;
++
++	// Unbind this scancode from other remappable needs (same behavior as the in-game screen)
++	if (scancode != 0)
++	{
++		for (int i = 0; i < NUM_REMAPPABLE_NEEDS; i++)
++			for (int j = 0; j < KEYBINDING_MAX_KEYS; j++)
++				if (gGamePrefs.keys[i].key[j] == scancode)
++					gGamePrefs.keys[i].key[j] = 0;
++	}
++	gGamePrefs.keys[needID].key[slot] = (int16_t) scancode;
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_ResetKeyBindings(void)
++{
++	SDL_memcpy(gGamePrefs.keys, kDefaultKeyBindings, sizeof(gGamePrefs.keys));
++	Web_ApplyPlatformDefaultKeys();
++}
++
++EMSCRIPTEN_KEEPALIVE const char* Web_GetScancodeName(int scancode)
++{
++	if (scancode <= 0 || scancode >= SDL_SCANCODE_COUNT)
++		return "";
++	return SDL_GetScancodeName((SDL_Scancode) scancode);
++}
++
++EMSCRIPTEN_KEEPALIVE int Web_GetNumRemappableNeeds(void)
++{
++	return NUM_REMAPPABLE_NEEDS;
++}
++
++// --- Prefs ---
++
++enum
++{
++	kWebPref_Extreme = 0,
++	kWebPref_Music,
++	kWebPref_AmbientSounds,
++	kWebPref_Force4x3,
++	kWebPref_HighQualityTextures,
++	kWebPref_Fog,
++	kWebPref_WhiteSky,
++	kWebPref_TeethFix,
++	kWebPref_MainMenuHelp,
++	kWebPref_HUDStyle,
++	kWebPref_Antialiasing,
++	kWebPref_Shadows,
++	kNumWebPrefs
++};
++
++static Byte* GetPrefPtr(int id)
++{
++	switch (id)
++	{
++		case kWebPref_Extreme:				return (Byte*) &gGamePrefs.extreme;
++		case kWebPref_Music:				return (Byte*) &gGamePrefs.music;
++		case kWebPref_AmbientSounds:		return (Byte*) &gGamePrefs.ambientSounds;
++		case kWebPref_Force4x3:				return (Byte*) &gGamePrefs.force4x3;
++		case kWebPref_HighQualityTextures:	return (Byte*) &gGamePrefs.highQualityTextures;
++		case kWebPref_Fog:					return (Byte*) &gGamePrefs.canDoFog;
++		case kWebPref_WhiteSky:				return (Byte*) &gGamePrefs.whiteSky;
++		case kWebPref_TeethFix:				return (Byte*) &gGamePrefs.nanosaurTeethFix;
++		case kWebPref_MainMenuHelp:			return (Byte*) &gGamePrefs.mainMenuHelp;
++		case kWebPref_HUDStyle:				return (Byte*) &gGamePrefs.hudStyle;
++		case kWebPref_Antialiasing:			return (Byte*) &gGamePrefs.antialiasingLevel;
++		case kWebPref_Shadows:				return (Byte*) &gGamePrefs.shadows;
++		default:							return NULL;
++	}
++}
++
++EMSCRIPTEN_KEEPALIVE int Web_GetPref(int id)
++{
++	Byte* p = GetPrefPtr(id);
++	return p ? (int) *p : -1;
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_SetPref(int id, int value)
++{
++	Byte* p = GetPrefPtr(id);
++	if (!p)
++		return;
++
++	Byte old = *p;
++	*p = (Byte) value;
++	if (old == *p)
++		return;
++
++	gSettingsDirty = true;
++
++	switch (id)
++	{
++		case kWebPref_Extreme:
++			SetProModeSettings(gGamePrefs.extreme);
++			break;
++
++		case kWebPref_HUDStyle:
++			Web_ApplyHUDStyleLive();
++			break;
++
++		case kWebPref_Music:
++			if (!gGamePrefs.music)
++				KillSong();
++			else if (gWebScreen != kWebScreen_Movie)
++				PlaySong(gWebScreen == kWebScreen_Game || gWebScreen == kWebScreen_Paused ? 0 : 1, true);
++			break;
++
++		default:
++			break;
++	}
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_SavePrefs(void)
++{
++	SavePrefs(&gGamePrefs);
++}
++
++EMSCRIPTEN_KEEPALIVE void Web_PauseGame(void)
++{
++	if (gWebScreen == kWebScreen_Game)
++		Web_SetVirtualNeed(kNeed_UIPause, 2);
++}
++
++EMSCRIPTEN_KEEPALIVE int Web_GetMainMenuSelection(void)
++{
++	return gCurrentSelection;
++}
+diff --git a/src/Web/WebGLRedirect.h b/src/Web/WebGLRedirect.h
+new file mode 100644
+index 0000000..5688436
+--- /dev/null
++++ b/src/Web/WebGLRedirect.h
+@@ -0,0 +1,108 @@
++// WEBGLREDIRECT.H
++// Force-included into every game translation unit in the Emscripten build.
++//
++// Nanosaur renders with a small subset of legacy fixed-function OpenGL (matrix stacks,
++// client-side vertex arrays, per-vertex lighting, linear fog, alpha test and Mac-style
++// packed pixel formats). None of that exists in WebGL2, so the calls below are renamed
++// to a compact emulation layer (WebGL_FFP.c) that implements them on top of GLES3/WebGL2.
++// Calls that map 1:1 onto WebGL2 (glClear, glViewport, glBlendFunc, ...) go straight
++// through to Emscripten's WebGL bindings.
++
++#pragma once
++
++#if defined(__EMSCRIPTEN__) && !defined(NANOSAUR_WEBGL_FFP_IMPL)
++
++#include <stdbool.h>
++#include <SDL3/SDL_opengl.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct SDL_Window;
++
++void			WebGL_Enable(GLenum cap);
++void			WebGL_Disable(GLenum cap);
++void			WebGL_EnableClientState(GLenum array);
++void			WebGL_DisableClientState(GLenum array);
++void			WebGL_MatrixMode(GLenum mode);
++void			WebGL_LoadMatrixf(const GLfloat* m);
++void			WebGL_LoadIdentity(void);
++void			WebGL_PushMatrix(void);
++void			WebGL_PopMatrix(void);
++void			WebGL_MultMatrixf(const GLfloat* m);
++void			WebGL_Ortho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f);
++void			WebGL_GetFloatv(GLenum pname, GLfloat* data);
++void			WebGL_GetIntegerv(GLenum pname, GLint* data);
++const GLubyte*	WebGL_GetString(GLenum name);
++GLenum			WebGL_GetError(void);
++void			WebGL_Lightfv(GLenum light, GLenum pname, const GLfloat* params);
++void			WebGL_LightModelfv(GLenum pname, const GLfloat* params);
++void			WebGL_ColorMaterial(GLenum face, GLenum mode);
++void			WebGL_Color4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
++void			WebGL_Fogf(GLenum pname, GLfloat param);
++void			WebGL_Fogi(GLenum pname, GLint param);
++void			WebGL_Fogfv(GLenum pname, const GLfloat* params);
++void			WebGL_Hint(GLenum target, GLenum mode);
++void			WebGL_AlphaFunc(GLenum func, GLclampf ref);
++void			WebGL_VertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* ptr);
++void			WebGL_NormalPointer(GLenum type, GLsizei stride, const GLvoid* ptr);
++void			WebGL_ColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* ptr);
++void			WebGL_TexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* ptr);
++void			WebGL_DrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices);
++void			WebGL_TexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height,
++								 GLint border, GLenum format, GLenum type, const GLvoid* pixels);
++void			WebGL_TexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
++									GLsizei height, GLenum format, GLenum type, const GLvoid* pixels);
++void			WebGL_TexParameteri(GLenum target, GLenum pname, GLint param);
++void			WebGL_PixelStorei(GLenum pname, GLint param);
++void			WebGL_BindTexture(GLenum target, GLuint texture);
++void			WebGL_DeleteTextures(GLsizei n, const GLuint* textures);
++
++bool			Web_SwapWindow(struct SDL_Window* window);
++bool			Web_SetSwapInterval(int interval);
++
++#ifdef __cplusplus
++}
++#endif
++
++#define glEnable				WebGL_Enable
++#define glDisable				WebGL_Disable
++#define glEnableClientState		WebGL_EnableClientState
++#define glDisableClientState	WebGL_DisableClientState
++#define glMatrixMode			WebGL_MatrixMode
++#define glLoadMatrixf			WebGL_LoadMatrixf
++#define glLoadIdentity			WebGL_LoadIdentity
++#define glPushMatrix			WebGL_PushMatrix
++#define glPopMatrix				WebGL_PopMatrix
++#define glMultMatrixf			WebGL_MultMatrixf
++#define glOrtho					WebGL_Ortho
++#define glGetFloatv				WebGL_GetFloatv
++#define glGetIntegerv			WebGL_GetIntegerv
++#define glGetString				WebGL_GetString
++#define glGetError				WebGL_GetError
++#define glLightfv				WebGL_Lightfv
++#define glLightModelfv			WebGL_LightModelfv
++#define glColorMaterial			WebGL_ColorMaterial
++#define glColor4f				WebGL_Color4f
++#define glFogf					WebGL_Fogf
++#define glFogi					WebGL_Fogi
++#define glFogfv					WebGL_Fogfv
++#define glHint					WebGL_Hint
++#define glAlphaFunc				WebGL_AlphaFunc
++#define glVertexPointer			WebGL_VertexPointer
++#define glNormalPointer			WebGL_NormalPointer
++#define glColorPointer			WebGL_ColorPointer
++#define glTexCoordPointer		WebGL_TexCoordPointer
++#define glDrawElements			WebGL_DrawElements
++#define glTexImage2D			WebGL_TexImage2D
++#define glTexSubImage2D			WebGL_TexSubImage2D
++#define glTexParameteri			WebGL_TexParameteri
++#define glPixelStorei			WebGL_PixelStorei
++#define glBindTexture			WebGL_BindTexture
++#define glDeleteTextures		WebGL_DeleteTextures
++
++#define SDL_GL_SwapWindow		Web_SwapWindow
++#define SDL_GL_SetSwapInterval	Web_SetSwapInterval
++
++#endif
+diff --git a/src/Web/WebGL_FFP.c b/src/Web/WebGL_FFP.c
+new file mode 100644
+index 0000000..36afea3
+--- /dev/null
++++ b/src/Web/WebGL_FFP.c
+@@ -0,0 +1,1286 @@
++// WEBGL_FFP.C
++// Fixed-function OpenGL 1.x emulation on top of WebGL2 (GLES 3.0) for the Nanosaur web port.
++//
++// Implements exactly the subset of legacy GL the game uses:
++//   - modelview/projection matrix stacks, glOrtho, glGetFloatv(matrices)
++//   - client-side vertex/normal/color/texcoord arrays + glDrawElements
++//   - per-vertex Gouraud lighting with directional lights, scene ambient, GL_COLOR_MATERIAL
++//   - linear/exp/exp2 fog, alpha test, GL_MODULATE texturing
++//   - Mac-style packed texture formats (BGRA + 1_5_5_5_REV / 8_8_8_8) with GL_UNPACK_ROW_LENGTH
++//
++// Client arrays are streamed into ring-buffered VBOs. One shader program is generated per
++// combination of {lighting, texturing, fog, alpha test} and cached.
++
++#ifndef NANOSAUR_WEBGL_FFP_IMPL
++#define NANOSAUR_WEBGL_FFP_IMPL 1
++#endif
++
++#include <GLES3/gl3.h>
++#include <emscripten.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++
++/****************************/
++/*    LEGACY GL ENUMS       */
++/****************************/
++
++#define LGL_MODELVIEW				0x1700
++#define LGL_PROJECTION				0x1701
++#define LGL_TEXTURE					0x1702
++#define LGL_MODELVIEW_MATRIX		0x0BA6
++#define LGL_PROJECTION_MATRIX		0x0BA7
++#define LGL_LIGHTING				0x0B50
++#define LGL_LIGHT0					0x4000
++#define LGL_FOG						0x0B60
++#define LGL_FOG_DENSITY				0x0B62
++#define LGL_FOG_START				0x0B63
++#define LGL_FOG_END					0x0B64
++#define LGL_FOG_MODE				0x0B65
++#define LGL_FOG_COLOR				0x0B66
++#define LGL_EXP						0x0800
++#define LGL_EXP2					0x0801
++#define LGL_NORMALIZE				0x0BA1
++#define LGL_RESCALE_NORMAL			0x803A
++#define LGL_ALPHA_TEST				0x0BC0
++#define LGL_COLOR_MATERIAL			0x0B57
++#define LGL_VERTEX_ARRAY			0x8074
++#define LGL_NORMAL_ARRAY			0x8075
++#define LGL_COLOR_ARRAY				0x8076
++#define LGL_TEXTURE_COORD_ARRAY		0x8078
++#define LGL_AMBIENT					0x1200
++#define LGL_DIFFUSE					0x1201
++#define LGL_SPECULAR				0x1202
++#define LGL_POSITION				0x1203
++#define LGL_LIGHT_MODEL_AMBIENT		0x0B53
++#define LGL_AMBIENT_AND_DIFFUSE		0x1602
++#define LGL_BGRA					0x80E1
++#define LGL_UNSIGNED_SHORT_1_5_5_5_REV	0x8366
++#define LGL_UNSIGNED_INT_8_8_8_8		0x8035
++#define LGL_UNSIGNED_INT_8_8_8_8_REV	0x8367
++#define LGL_UNPACK_ROW_LENGTH		0x0CF2
++#define LGL_TEXTURE_2D				0x0DE1
++#define LGL_CLAMP					0x2900
++#define LGL_LINE_SMOOTH				0x0B20
++#define LGL_POLYGON_SMOOTH			0x0B41
++#define LGL_MULTISAMPLE				0x809D
++
++typedef double GLdouble;
++
++#define MAX_LIGHTS					4
++#define MAX_STACK					32
++
++enum
++{
++	kAttribPos		= 0,
++	kAttribNormal	= 1,
++	kAttribColor	= 2,
++	kAttribUV		= 3,
++};
++
++enum
++{
++	kFeatLighting	= 1 << 0,
++	kFeatTexture	= 1 << 1,
++	kFeatFog		= 1 << 2,
++	kFeatAlphaTest	= 1 << 3,
++	kNumVariants	= 1 << 4,
++};
++
++typedef struct { float m[16]; } Mat4;
++
++typedef struct
++{
++	bool		enabled;
++	float		eyeDir[4];		// eye-space position/direction (as stored by glLightfv(GL_POSITION))
++	float		ambient[4];
++	float		diffuse[4];
++} Light;
++
++typedef struct
++{
++	bool			enabled;
++	GLint			size;
++	GLenum			type;
++	GLsizei			stride;
++	const void*		ptr;
++} ClientArray;
++
++typedef struct
++{
++	GLuint	program;
++	GLint	uMV, uProj, uNormalMat;
++	GLint	uNumLights, uLightDir, uLightAmb, uLightDiff, uSceneAmbient;
++	GLint	uMatAmbient, uMatDiffuse, uColorMaterial;
++	GLint	uFogParams, uFogColor;
++	GLint	uAlphaRef;
++	GLint	uTex;
++	uint32_t	seenMatrixSerial;
++	uint32_t	seenLightSerial;
++	uint32_t	seenFogSerial;
++	uint32_t	seenMiscSerial;
++} Program;
++
++enum { kTexKind_None = 0, kTexKind_RGBA8, kTexKind_RGB5A1, kTexFlag_Opaque = 0x80 };
++
++/****************************/
++/*    STATE                 */
++/****************************/
++
++static struct
++{
++	bool		initialized;
++
++	// Matrix stacks
++	GLenum		matrixMode;
++	Mat4		mvStack[MAX_STACK];
++	int			mvTop;
++	Mat4		projStack[8];
++	int			projTop;
++	Mat4		texStack[2];
++	int			texTop;
++	uint32_t	matrixSerial;
++
++	// Capabilities
++	bool		lighting;
++	bool		fog;
++	bool		texture2D;
++	bool		alphaTest;
++	bool		colorMaterial;
++
++	// Lighting
++	Light		lights[8];
++	float		sceneAmbient[4];
++	float		matAmbient[4];
++	float		matDiffuse[4];
++	uint32_t	lightSerial;
++
++	// Fog
++	GLenum		fogMode;
++	float		fogStart, fogEnd, fogDensity;
++	float		fogColor[4];
++	uint32_t	fogSerial;
++
++	// Alpha test
++	GLenum		alphaFunc;
++	float		alphaRef;
++	uint32_t	miscSerial;
++
++	// Current color
++	float		color[4];
++
++	// Client arrays
++	ClientArray	arrays[4];
++
++	// Pixel store
++	GLint		unpackRowLength;
++
++	// Textures
++	GLuint		boundTexture;
++	uint8_t*	texKinds;
++	int			texKindsCap;
++
++	// GPU objects
++	GLuint		vao;
++	GLuint		vbo;
++	GLuint		ibo;
++	GLsizeiptr	vboCap, vboOff;
++	GLsizeiptr	iboCap, iboOff;
++	Program		programs[kNumVariants];
++	int			currentProgram;
++
++	// Scratch buffers
++	uint8_t*	scratch;
++	size_t		scratchCap;
++	uint8_t*	pixScratch;
++	size_t		pixScratchCap;
++
++	GLenum		pendingError;
++} S;
++
++/****************************/
++/*    MATRIX HELPERS        */
++/****************************/
++
++static void Mat4_Identity(Mat4* m)
++{
++	memset(m, 0, sizeof(*m));
++	m->m[0] = m->m[5] = m->m[10] = m->m[15] = 1.0f;
++}
++
++// out = a * b (column-major, like OpenGL)
++static void Mat4_Mul(const Mat4* a, const Mat4* b, Mat4* out)
++{
++	Mat4 r;
++	for (int c = 0; c < 4; c++)
++	{
++		for (int row = 0; row < 4; row++)
++		{
++			r.m[c*4+row] =
++				a->m[0*4+row] * b->m[c*4+0] +
++				a->m[1*4+row] * b->m[c*4+1] +
++				a->m[2*4+row] * b->m[c*4+2] +
++				a->m[3*4+row] * b->m[c*4+3];
++		}
++	}
++	*out = r;
++}
++
++static Mat4* CurrentMatrix(void)
++{
++	switch (S.matrixMode)
++	{
++		case LGL_PROJECTION:	return &S.projStack[S.projTop];
++		case LGL_TEXTURE:		return &S.texStack[S.texTop];
++		default:				return &S.mvStack[S.mvTop];
++	}
++}
++
++static void TouchMatrix(void)
++{
++	S.matrixSerial++;
++}
++
++// Upper-left 3x3 of the inverse-transpose of the modelview matrix
++static void CalcNormalMatrix(const Mat4* mv, float out[9])
++{
++	const float* m = mv->m;
++	float a00 = m[0], a01 = m[1], a02 = m[2];
++	float a10 = m[4], a11 = m[5], a12 = m[6];
++	float a20 = m[8], a21 = m[9], a22 = m[10];
++
++	float b01 = a22 * a11 - a12 * a21;
++	float b11 = -a22 * a10 + a12 * a20;
++	float b21 = a21 * a10 - a11 * a20;
++
++	float det = a00 * b01 + a01 * b11 + a02 * b21;
++	if (fabsf(det) < 1e-12f)
++		det = 1.0f;
++	float id = 1.0f / det;
++
++	// inverse (column-major)
++	float inv[9];
++	inv[0] = b01 * id;
++	inv[1] = (-a22 * a01 + a02 * a21) * id;
++	inv[2] = (a12 * a01 - a02 * a11) * id;
++	inv[3] = b11 * id;
++	inv[4] = (a22 * a00 - a02 * a20) * id;
++	inv[5] = (-a12 * a00 + a02 * a10) * id;
++	inv[6] = b21 * id;
++	inv[7] = (-a21 * a00 + a01 * a20) * id;
++	inv[8] = (a11 * a00 - a01 * a10) * id;
++
++	// transpose
++	out[0] = inv[0]; out[1] = inv[3]; out[2] = inv[6];
++	out[3] = inv[1]; out[4] = inv[4]; out[5] = inv[7];
++	out[6] = inv[2]; out[7] = inv[5]; out[8] = inv[8];
++}
++
++/****************************/
++/*    SHADERS               */
++/****************************/
++
++static const char* kVertexShaderBody =
++	"layout(location=0) in vec4 aPos;\n"
++	"layout(location=1) in vec3 aNormal;\n"
++	"layout(location=2) in vec4 aColor;\n"
++	"layout(location=3) in vec2 aUV;\n"
++	"uniform mat4 uMV;\n"
++	"uniform mat4 uProj;\n"
++	"uniform mat3 uNormalMat;\n"
++	"out vec4 vColor;\n"
++	"out vec2 vUV;\n"
++	"out float vFogZ;\n"
++	"#ifdef LIGHTING\n"
++	"uniform int uNumLights;\n"
++	"uniform vec3 uLightDir[4];\n"
++	"uniform vec3 uLightAmb[4];\n"
++	"uniform vec3 uLightDiff[4];\n"
++	"uniform vec3 uSceneAmbient;\n"
++	"uniform vec4 uMatAmbient;\n"
++	"uniform vec4 uMatDiffuse;\n"
++	"uniform bool uColorMaterial;\n"
++	"#endif\n"
++	"void main() {\n"
++	"  vec4 eye = uMV * aPos;\n"
++	"  gl_Position = uProj * eye;\n"
++	"  vFogZ = abs(eye.z);\n"
++	"  vUV = aUV;\n"
++	"#ifdef LIGHTING\n"
++	"  vec4 amb = uColorMaterial ? aColor : uMatAmbient;\n"
++	"  vec4 dif = uColorMaterial ? aColor : uMatDiffuse;\n"
++	"  vec3 n = normalize(uNormalMat * aNormal);\n"
++	"  vec3 c = uSceneAmbient * amb.rgb;\n"
++	"  for (int i = 0; i < 4; i++) {\n"
++	"    if (i >= uNumLights) break;\n"
++	"    float d = max(dot(n, uLightDir[i]), 0.0);\n"
++	"    c += uLightAmb[i] * amb.rgb + d * uLightDiff[i] * dif.rgb;\n"
++	"  }\n"
++	"  vColor = vec4(clamp(c, 0.0, 1.0), dif.a);\n"
++	"#else\n"
++	"  vColor = aColor;\n"
++	"#endif\n"
++	"}\n";
++
++static const char* kFragmentShaderBody =
++	"precision mediump float;\n"
++	"in vec4 vColor;\n"
++	"in vec2 vUV;\n"
++	"in highp float vFogZ;\n"
++	"out vec4 fragColor;\n"
++	"uniform sampler2D uTex;\n"
++	"uniform vec4 uFogParams;\n"		// x=start, y=end, z=density, w=mode (0 linear, 1 exp, 2 exp2)
++	"uniform vec3 uFogColor;\n"
++	"uniform float uAlphaRef;\n"
++	"void main() {\n"
++	"  vec4 c = vColor;\n"
++	"#ifdef TEXTURE\n"
++	"  c *= texture(uTex, vUV);\n"
++	"#endif\n"
++	"#ifdef ALPHATEST\n"
++	"  if (c.a <= uAlphaRef) discard;\n"
++	"#endif\n"
++	"#ifdef FOG\n"
++	"  float f;\n"
++	"  if (uFogParams.w < 0.5) f = (uFogParams.y - vFogZ) / max(uFogParams.y - uFogParams.x, 0.0001);\n"
++	"  else if (uFogParams.w < 1.5) f = exp(-uFogParams.z * vFogZ);\n"
++	"  else { float e = uFogParams.z * vFogZ; f = exp(-e * e); }\n"
++	"  c.rgb = mix(uFogColor, c.rgb, clamp(f, 0.0, 1.0));\n"
++	"#endif\n"
++	"  fragColor = c;\n"
++	"}\n";
++
++static GLuint CompileShader(GLenum type, const char* defines, const char* body)
++{
++	const char* sources[3] = { "#version 300 es\n", defines, body };
++	GLuint sh = glCreateShader(type);
++	glShaderSource(sh, 3, sources, NULL);
++	glCompileShader(sh);
++	GLint ok = 0;
++	glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
++	if (!ok)
++	{
++		char log[2048];
++		glGetShaderInfoLog(sh, sizeof(log), NULL, log);
++		printf("[WebGL_FFP] shader compile error:\n%s\n", log);
++	}
++	return sh;
++}
++
++static Program* GetProgram(int variant)
++{
++	Program* p = &S.programs[variant];
++	if (p->program)
++		return p;
++
++	char defines[256];
++	snprintf(defines, sizeof(defines), "%s%s%s%s",
++		(variant & kFeatLighting)	? "#define LIGHTING\n"	: "",
++		(variant & kFeatTexture)	? "#define TEXTURE\n"	: "",
++		(variant & kFeatFog)		? "#define FOG\n"		: "",
++		(variant & kFeatAlphaTest)	? "#define ALPHATEST\n"	: "");
++
++	GLuint vs = CompileShader(GL_VERTEX_SHADER, defines, kVertexShaderBody);
++	GLuint fs = CompileShader(GL_FRAGMENT_SHADER, defines, kFragmentShaderBody);
++	GLuint prog = glCreateProgram();
++	glAttachShader(prog, vs);
++	glAttachShader(prog, fs);
++	glLinkProgram(prog);
++	GLint ok = 0;
++	glGetProgramiv(prog, GL_LINK_STATUS, &ok);
++	if (!ok)
++	{
++		char log[2048];
++		glGetProgramInfoLog(prog, sizeof(log), NULL, log);
++		printf("[WebGL_FFP] program link error:\n%s\n", log);
++	}
++	glDeleteShader(vs);
++	glDeleteShader(fs);
++
++	p->program			= prog;
++	p->uMV				= glGetUniformLocation(prog, "uMV");
++	p->uProj			= glGetUniformLocation(prog, "uProj");
++	p->uNormalMat		= glGetUniformLocation(prog, "uNormalMat");
++	p->uNumLights		= glGetUniformLocation(prog, "uNumLights");
++	p->uLightDir		= glGetUniformLocation(prog, "uLightDir");
++	p->uLightAmb		= glGetUniformLocation(prog, "uLightAmb");
++	p->uLightDiff		= glGetUniformLocation(prog, "uLightDiff");
++	p->uSceneAmbient	= glGetUniformLocation(prog, "uSceneAmbient");
++	p->uMatAmbient		= glGetUniformLocation(prog, "uMatAmbient");
++	p->uMatDiffuse		= glGetUniformLocation(prog, "uMatDiffuse");
++	p->uColorMaterial	= glGetUniformLocation(prog, "uColorMaterial");
++	p->uFogParams		= glGetUniformLocation(prog, "uFogParams");
++	p->uFogColor		= glGetUniformLocation(prog, "uFogColor");
++	p->uAlphaRef		= glGetUniformLocation(prog, "uAlphaRef");
++	p->uTex				= glGetUniformLocation(prog, "uTex");
++
++	glUseProgram(prog);
++	if (p->uTex >= 0)
++		glUniform1i(p->uTex, 0);
++	S.currentProgram = variant;
++
++	// Force full uniform upload on first use
++	p->seenMatrixSerial	= 0xFFFFFFFF;
++	p->seenLightSerial	= 0xFFFFFFFF;
++	p->seenFogSerial	= 0xFFFFFFFF;
++	p->seenMiscSerial	= 0xFFFFFFFF;
++	return p;
++}
++
++/****************************/
++/*    INIT                  */
++/****************************/
++
++static void EnsureInit(void)
++{
++	if (S.initialized)
++		return;
++
++	S.initialized = true;
++	S.matrixMode = LGL_MODELVIEW;
++	Mat4_Identity(&S.mvStack[0]);
++	Mat4_Identity(&S.projStack[0]);
++	Mat4_Identity(&S.texStack[0]);
++	S.matrixSerial = 1;
++
++	S.sceneAmbient[0] = S.sceneAmbient[1] = S.sceneAmbient[2] = 0.2f; S.sceneAmbient[3] = 1.0f;
++	S.matAmbient[0] = S.matAmbient[1] = S.matAmbient[2] = 0.2f; S.matAmbient[3] = 1.0f;
++	S.matDiffuse[0] = S.matDiffuse[1] = S.matDiffuse[2] = 0.8f; S.matDiffuse[3] = 1.0f;
++	for (int i = 0; i < 8; i++)
++	{
++		Light* l = &S.lights[i];
++		l->eyeDir[0] = 0; l->eyeDir[1] = 0; l->eyeDir[2] = 1; l->eyeDir[3] = 0;
++		l->ambient[3] = 1;
++		float d = (i == 0) ? 1.0f : 0.0f;
++		l->diffuse[0] = l->diffuse[1] = l->diffuse[2] = d; l->diffuse[3] = 1;
++	}
++	S.lightSerial = 1;
++
++	S.fogMode = LGL_EXP;
++	S.fogStart = 0; S.fogEnd = 1; S.fogDensity = 1;
++	S.fogSerial = 1;
++
++	S.alphaFunc = GL_ALWAYS;
++	S.alphaRef = 0;
++	S.miscSerial = 1;
++
++	S.color[0] = S.color[1] = S.color[2] = S.color[3] = 1.0f;
++	S.currentProgram = -1;
++
++	glGenVertexArrays(1, &S.vao);
++	glBindVertexArray(S.vao);
++
++	S.vboCap = 4 * 1024 * 1024;
++	glGenBuffers(1, &S.vbo);
++	glBindBuffer(GL_ARRAY_BUFFER, S.vbo);
++	glBufferData(GL_ARRAY_BUFFER, S.vboCap, NULL, GL_STREAM_DRAW);
++
++	S.iboCap = 1 * 1024 * 1024;
++	glGenBuffers(1, &S.ibo);
++	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, S.ibo);
++	glBufferData(GL_ELEMENT_ARRAY_BUFFER, S.iboCap, NULL, GL_STREAM_DRAW);
++
++	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
++}
++
++static void* Scratch(size_t bytes)
++{
++	if (bytes > S.scratchCap)
++	{
++		S.scratchCap = bytes + bytes / 2 + 4096;
++		S.scratch = realloc(S.scratch, S.scratchCap);
++	}
++	return S.scratch;
++}
++
++static void* PixScratch(size_t bytes)
++{
++	if (bytes > S.pixScratchCap)
++	{
++		S.pixScratchCap = bytes;
++		S.pixScratch = realloc(S.pixScratch, S.pixScratchCap);
++	}
++	return S.pixScratch;
++}
++
++/****************************/
++/*    CAPABILITIES          */
++/****************************/
++
++static void SetCap(GLenum cap, bool on)
++{
++	EnsureInit();
++
++	if (cap >= LGL_LIGHT0 && cap < LGL_LIGHT0 + 8)
++	{
++		S.lights[cap - LGL_LIGHT0].enabled = on;
++		S.lightSerial++;
++		return;
++	}
++
++	switch (cap)
++	{
++		case LGL_LIGHTING:			S.lighting = on; return;
++		case LGL_FOG:				S.fog = on; return;
++		case LGL_TEXTURE_2D:		S.texture2D = on; return;
++		case LGL_ALPHA_TEST:		S.alphaTest = on; return;
++		case LGL_COLOR_MATERIAL:	S.colorMaterial = on; S.lightSerial++; return;
++		case LGL_NORMALIZE:
++		case LGL_RESCALE_NORMAL:
++		case LGL_LINE_SMOOTH:
++		case LGL_POLYGON_SMOOTH:
++		case LGL_MULTISAMPLE:
++			return;		// always normalized in shader / not applicable
++
++		case GL_CULL_FACE:
++		case GL_DEPTH_TEST:
++		case GL_BLEND:
++		case GL_SCISSOR_TEST:
++		case GL_DITHER:
++		case GL_POLYGON_OFFSET_FILL:
++		case GL_SAMPLE_ALPHA_TO_COVERAGE:
++		case GL_SAMPLE_COVERAGE:
++		case GL_STENCIL_TEST:
++			if (on) glEnable(cap); else glDisable(cap);
++			return;
++
++		default:
++			return;		// silently ignore unknown legacy caps
++	}
++}
++
++void WebGL_Enable(GLenum cap)	{ SetCap(cap, true); }
++void WebGL_Disable(GLenum cap)	{ SetCap(cap, false); }
++
++static ClientArray* GetClientArray(GLenum array)
++{
++	switch (array)
++	{
++		case LGL_VERTEX_ARRAY:			return &S.arrays[kAttribPos];
++		case LGL_NORMAL_ARRAY:			return &S.arrays[kAttribNormal];
++		case LGL_COLOR_ARRAY:			return &S.arrays[kAttribColor];
++		case LGL_TEXTURE_COORD_ARRAY:	return &S.arrays[kAttribUV];
++		default:						return NULL;
++	}
++}
++
++void WebGL_EnableClientState(GLenum array)
++{
++	EnsureInit();
++	ClientArray* a = GetClientArray(array);
++	if (a) a->enabled = true;
++}
++
++void WebGL_DisableClientState(GLenum array)
++{
++	EnsureInit();
++	ClientArray* a = GetClientArray(array);
++	if (a) a->enabled = false;
++}
++
++/****************************/
++/*    MATRICES              */
++/****************************/
++
++void WebGL_MatrixMode(GLenum mode)
++{
++	EnsureInit();
++	S.matrixMode = mode;
++}
++
++void WebGL_LoadMatrixf(const GLfloat* m)
++{
++	EnsureInit();
++	memcpy(CurrentMatrix()->m, m, sizeof(float) * 16);
++	TouchMatrix();
++}
++
++void WebGL_LoadIdentity(void)
++{
++	EnsureInit();
++	Mat4_Identity(CurrentMatrix());
++	TouchMatrix();
++}
++
++void WebGL_MultMatrixf(const GLfloat* m)
++{
++	EnsureInit();
++	Mat4 b;
++	memcpy(b.m, m, sizeof(b.m));
++	Mat4* cur = CurrentMatrix();
++	Mat4_Mul(cur, &b, cur);
++	TouchMatrix();
++}
++
++void WebGL_PushMatrix(void)
++{
++	EnsureInit();
++	switch (S.matrixMode)
++	{
++		case LGL_PROJECTION:
++			if (S.projTop < 7) { S.projStack[S.projTop+1] = S.projStack[S.projTop]; S.projTop++; }
++			else S.pendingError = GL_INVALID_OPERATION;
++			break;
++		case LGL_TEXTURE:
++			if (S.texTop < 1) { S.texStack[S.texTop+1] = S.texStack[S.texTop]; S.texTop++; }
++			break;
++		default:
++			if (S.mvTop < MAX_STACK-1) { S.mvStack[S.mvTop+1] = S.mvStack[S.mvTop]; S.mvTop++; }
++			else S.pendingError = GL_INVALID_OPERATION;
++			break;
++	}
++}
++
++void WebGL_PopMatrix(void)
++{
++	EnsureInit();
++	switch (S.matrixMode)
++	{
++		case LGL_PROJECTION:	if (S.projTop > 0) S.projTop--; break;
++		case LGL_TEXTURE:		if (S.texTop > 0) S.texTop--; break;
++		default:				if (S.mvTop > 0) S.mvTop--; break;
++	}
++	TouchMatrix();
++}
++
++void WebGL_Ortho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f)
++{
++	EnsureInit();
++	Mat4 o;
++	Mat4_Identity(&o);
++	o.m[0]  = (float)(2.0 / (r - l));
++	o.m[5]  = (float)(2.0 / (t - b));
++	o.m[10] = (float)(-2.0 / (f - n));
++	o.m[12] = (float)(-(r + l) / (r - l));
++	o.m[13] = (float)(-(t + b) / (t - b));
++	o.m[14] = (float)(-(f + n) / (f - n));
++	Mat4* cur = CurrentMatrix();
++	Mat4_Mul(cur, &o, cur);
++	TouchMatrix();
++}
++
++void WebGL_GetFloatv(GLenum pname, GLfloat* data)
++{
++	EnsureInit();
++	switch (pname)
++	{
++		case LGL_MODELVIEW_MATRIX:	memcpy(data, S.mvStack[S.mvTop].m, sizeof(float)*16); return;
++		case LGL_PROJECTION_MATRIX:	memcpy(data, S.projStack[S.projTop].m, sizeof(float)*16); return;
++		default:					glGetFloatv(pname, data); return;
++	}
++}
++
++void WebGL_GetIntegerv(GLenum pname, GLint* data)
++{
++	EnsureInit();
++	switch (pname)
++	{
++		case LGL_UNPACK_ROW_LENGTH:	*data = S.unpackRowLength; return;
++		default:					glGetIntegerv(pname, data); return;
++	}
++}
++
++const GLubyte* WebGL_GetString(GLenum name)
++{
++	return glGetString(name);
++}
++
++GLenum WebGL_GetError(void)
++{
++	// glGetError is a synchronous round-trip to the GPU process in browsers, which stalls the
++	// pipeline. The game calls it after nearly every GL call, so only report our own errors.
++	GLenum e = S.pendingError;
++	S.pendingError = GL_NO_ERROR;
++#if _DEBUG
++	if (e == GL_NO_ERROR)
++		e = glGetError();
++#endif
++	return e;
++}
++
++/****************************/
++/*    LIGHTING / FOG        */
++/****************************/
++
++void WebGL_Lightfv(GLenum light, GLenum pname, const GLfloat* params)
++{
++	EnsureInit();
++	if (light < LGL_LIGHT0 || light >= LGL_LIGHT0 + 8)
++		return;
++
++	Light* l = &S.lights[light - LGL_LIGHT0];
++	switch (pname)
++	{
++		case LGL_POSITION:
++		{
++			// Light positions are transformed by the modelview matrix at the time they're specified
++			const float* m = S.mvStack[S.mvTop].m;
++			float x = params[0], y = params[1], z = params[2], w = params[3];
++			l->eyeDir[0] = m[0]*x + m[4]*y + m[8]*z  + m[12]*w;
++			l->eyeDir[1] = m[1]*x + m[5]*y + m[9]*z  + m[13]*w;
++			l->eyeDir[2] = m[2]*x + m[6]*y + m[10]*z + m[14]*w;
++			l->eyeDir[3] = w;
++			break;
++		}
++		case LGL_AMBIENT:	memcpy(l->ambient, params, sizeof(float)*4); break;
++		case LGL_DIFFUSE:	memcpy(l->diffuse, params, sizeof(float)*4); break;
++		default:			break;
++	}
++	S.lightSerial++;
++}
++
++void WebGL_LightModelfv(GLenum pname, const GLfloat* params)
++{
++	EnsureInit();
++	if (pname == LGL_LIGHT_MODEL_AMBIENT)
++	{
++		memcpy(S.sceneAmbient, params, sizeof(float)*4);
++		S.lightSerial++;
++	}
++}
++
++void WebGL_ColorMaterial(GLenum face, GLenum mode)
++{
++	(void) face;
++	(void) mode;		// Only GL_AMBIENT_AND_DIFFUSE is used by the game
++}
++
++void WebGL_Color4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a)
++{
++	S.color[0] = r; S.color[1] = g; S.color[2] = b; S.color[3] = a;
++}
++
++void WebGL_Fogf(GLenum pname, GLfloat param)
++{
++	EnsureInit();
++	switch (pname)
++	{
++		case LGL_FOG_START:		S.fogStart = param; break;
++		case LGL_FOG_END:		S.fogEnd = param; break;
++		case LGL_FOG_DENSITY:	S.fogDensity = param; break;
++		case LGL_FOG_MODE:		S.fogMode = (GLenum) param; break;
++		default: return;
++	}
++	S.fogSerial++;
++}
++
++void WebGL_Fogi(GLenum pname, GLint param)
++{
++	WebGL_Fogf(pname, (GLfloat) param);
++}
++
++void WebGL_Fogfv(GLenum pname, const GLfloat* params)
++{
++	EnsureInit();
++	if (pname == LGL_FOG_COLOR)
++	{
++		memcpy(S.fogColor, params, sizeof(float)*4);
++		S.fogSerial++;
++	}
++	else
++	{
++		WebGL_Fogf(pname, params[0]);
++	}
++}
++
++void WebGL_Hint(GLenum target, GLenum mode)
++{
++	(void) target;
++	(void) mode;
++}
++
++void WebGL_AlphaFunc(GLenum func, GLclampf ref)
++{
++	EnsureInit();
++	S.alphaFunc = func;
++	S.alphaRef = ref;
++	S.miscSerial++;
++}
++
++/****************************/
++/*    CLIENT ARRAYS         */
++/****************************/
++
++static void SetArray(int which, GLint size, GLenum type, GLsizei stride, const void* ptr)
++{
++	ClientArray* a = &S.arrays[which];
++	a->size = size;
++	a->type = type;
++	a->stride = stride;
++	a->ptr = ptr;
++}
++
++void WebGL_VertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* ptr)		{ SetArray(kAttribPos, size, type, stride, ptr); }
++void WebGL_NormalPointer(GLenum type, GLsizei stride, const GLvoid* ptr)				{ SetArray(kAttribNormal, 3, type, stride, ptr); }
++void WebGL_ColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* ptr)		{ SetArray(kAttribColor, size, type, stride, ptr); }
++void WebGL_TexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* ptr)	{ SetArray(kAttribUV, size, type, stride, ptr); }
++
++static int ComponentBytes(GLenum type)
++{
++	switch (type)
++	{
++		case GL_BYTE: case GL_UNSIGNED_BYTE:	return 1;
++		case GL_SHORT: case GL_UNSIGNED_SHORT:	return 2;
++		default:								return 4;
++	}
++}
++
++/****************************/
++/*    DRAW                  */
++/****************************/
++
++static void UploadUniforms(Program* p, int variant)
++{
++	if (p->seenMatrixSerial != S.matrixSerial)
++	{
++		const Mat4* mv = &S.mvStack[S.mvTop];
++		glUniformMatrix4fv(p->uMV, 1, GL_FALSE, mv->m);
++		glUniformMatrix4fv(p->uProj, 1, GL_FALSE, S.projStack[S.projTop].m);
++		if ((variant & kFeatLighting) && p->uNormalMat >= 0)
++		{
++			float nm[9];
++			CalcNormalMatrix(mv, nm);
++			glUniformMatrix3fv(p->uNormalMat, 1, GL_FALSE, nm);
++		}
++		p->seenMatrixSerial = S.matrixSerial;
++	}
++
++	if ((variant & kFeatLighting) && p->seenLightSerial != S.lightSerial)
++	{
++		float dir[MAX_LIGHTS*3], amb[MAX_LIGHTS*3], dif[MAX_LIGHTS*3];
++		int n = 0;
++		for (int i = 0; i < 8 && n < MAX_LIGHTS; i++)
++		{
++			const Light* l = &S.lights[i];
++			if (!l->enabled)
++				continue;
++			float x = l->eyeDir[0], y = l->eyeDir[1], z = l->eyeDir[2];
++			float len = sqrtf(x*x + y*y + z*z);
++			if (len > 1e-6f) { x /= len; y /= len; z /= len; }
++			dir[n*3+0] = x; dir[n*3+1] = y; dir[n*3+2] = z;
++			amb[n*3+0] = l->ambient[0]; amb[n*3+1] = l->ambient[1]; amb[n*3+2] = l->ambient[2];
++			dif[n*3+0] = l->diffuse[0]; dif[n*3+1] = l->diffuse[1]; dif[n*3+2] = l->diffuse[2];
++			n++;
++		}
++		glUniform1i(p->uNumLights, n);
++		if (n > 0)
++		{
++			glUniform3fv(p->uLightDir, n, dir);
++			glUniform3fv(p->uLightAmb, n, amb);
++			glUniform3fv(p->uLightDiff, n, dif);
++		}
++		glUniform3fv(p->uSceneAmbient, 1, S.sceneAmbient);
++		glUniform4fv(p->uMatAmbient, 1, S.matAmbient);
++		glUniform4fv(p->uMatDiffuse, 1, S.matDiffuse);
++		glUniform1i(p->uColorMaterial, S.colorMaterial ? 1 : 0);
++		p->seenLightSerial = S.lightSerial;
++	}
++
++	if ((variant & kFeatFog) && p->seenFogSerial != S.fogSerial)
++	{
++		float mode = (S.fogMode == LGL_EXP) ? 1.0f : (S.fogMode == LGL_EXP2) ? 2.0f : 0.0f;
++		glUniform4f(p->uFogParams, S.fogStart, S.fogEnd, S.fogDensity, mode);
++		glUniform3fv(p->uFogColor, 1, S.fogColor);
++		p->seenFogSerial = S.fogSerial;
++	}
++
++	if ((variant & kFeatAlphaTest) && p->seenMiscSerial != S.miscSerial)
++	{
++		// The game only uses GL_GREATER; approximate the others conservatively.
++		float ref = S.alphaRef;
++		if (S.alphaFunc == GL_GEQUAL)
++			ref -= 1.0f / 512.0f;
++		glUniform1f(p->uAlphaRef, ref);
++		p->seenMiscSerial = S.miscSerial;
++	}
++}
++
++static GLsizeiptr RingAlloc(GLenum target, GLuint buffer, GLsizeiptr* off, GLsizeiptr* cap, GLsizeiptr bytes, GLsizeiptr align)
++{
++	GLsizeiptr o = (*off + (align - 1)) & ~(align - 1);
++	if (bytes > *cap)
++	{
++		// Grow
++		while (*cap < bytes) *cap *= 2;
++		glBindBuffer(target, buffer);
++		glBufferData(target, *cap, NULL, GL_STREAM_DRAW);
++		o = 0;
++	}
++	else if (o + bytes > *cap)
++	{
++		// Orphan & restart
++		glBindBuffer(target, buffer);
++		glBufferData(target, *cap, NULL, GL_STREAM_DRAW);
++		o = 0;
++	}
++	*off = o + bytes;
++	return o;
++}
++
++void WebGL_DrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices)
++{
++	EnsureInit();
++
++	if (count <= 0 || !indices || !S.arrays[kAttribPos].enabled || !S.arrays[kAttribPos].ptr)
++		return;
++
++	// Find vertex range
++	uint32_t maxIndex = 0;
++	int indexBytes;
++	switch (type)
++	{
++		case GL_UNSIGNED_BYTE:
++		{
++			const uint8_t* ix = (const uint8_t*) indices;
++			for (int i = 0; i < count; i++) if (ix[i] > maxIndex) maxIndex = ix[i];
++			indexBytes = 1;
++			break;
++		}
++		case GL_UNSIGNED_SHORT:
++		{
++			const uint16_t* ix = (const uint16_t*) indices;
++			for (int i = 0; i < count; i++) if (ix[i] > maxIndex) maxIndex = ix[i];
++			indexBytes = 2;
++			break;
++		}
++		case GL_UNSIGNED_INT:
++		default:
++		{
++			const uint32_t* ix = (const uint32_t*) indices;
++			for (int i = 0; i < count; i++) if (ix[i] > maxIndex) maxIndex = ix[i];
++			indexBytes = 4;
++			type = GL_UNSIGNED_INT;
++			break;
++		}
++	}
++	const uint32_t numVerts = maxIndex + 1;
++
++	// Determine which attributes are live
++	const bool useNormal	= S.lighting && S.arrays[kAttribNormal].enabled && S.arrays[kAttribNormal].ptr;
++	const bool useColor		= S.arrays[kAttribColor].enabled && S.arrays[kAttribColor].ptr;
++	const bool useUV		= S.texture2D && S.arrays[kAttribUV].enabled && S.arrays[kAttribUV].ptr;
++
++	// Pack attributes into scratch
++	size_t attrBytes[4] = {0,0,0,0};
++	size_t attrOffs[4] = {0,0,0,0};
++	bool live[4] = { true, useNormal, useColor, useUV };
++	size_t total = 0;
++	for (int a = 0; a < 4; a++)
++	{
++		if (!live[a]) continue;
++		const ClientArray* arr = &S.arrays[a];
++		size_t elem = (size_t) arr->size * ComponentBytes(arr->type);
++		attrBytes[a] = elem * numVerts;
++		total = (total + 3) & ~(size_t)3;
++		attrOffs[a] = total;
++		total += attrBytes[a];
++	}
++
++	uint8_t* buf = (uint8_t*) Scratch(total);
++	for (int a = 0; a < 4; a++)
++	{
++		if (!live[a]) continue;
++		const ClientArray* arr = &S.arrays[a];
++		size_t elem = (size_t) arr->size * ComponentBytes(arr->type);
++		size_t stride = arr->stride ? (size_t) arr->stride : elem;
++		if (stride == elem)
++		{
++			memcpy(buf + attrOffs[a], arr->ptr, attrBytes[a]);
++		}
++		else
++		{
++			const uint8_t* src = (const uint8_t*) arr->ptr;
++			uint8_t* dst = buf + attrOffs[a];
++			for (uint32_t v = 0; v < numVerts; v++)
++				memcpy(dst + v*elem, src + v*stride, elem);
++		}
++	}
++
++	// Upload vertex data
++	glBindVertexArray(S.vao);
++	GLsizeiptr vOff = RingAlloc(GL_ARRAY_BUFFER, S.vbo, &S.vboOff, &S.vboCap, (GLsizeiptr) total, 16);
++	glBindBuffer(GL_ARRAY_BUFFER, S.vbo);
++	glBufferSubData(GL_ARRAY_BUFFER, vOff, (GLsizeiptr) total, buf);
++
++	for (int a = 0; a < 4; a++)
++	{
++		if (live[a])
++		{
++			const ClientArray* arr = &S.arrays[a];
++			GLboolean norm = (arr->type == GL_UNSIGNED_BYTE && a == kAttribColor) ? GL_TRUE : GL_FALSE;
++			glEnableVertexAttribArray(a);
++			glVertexAttribPointer(a, arr->size, arr->type, norm, 0, (const void*)(uintptr_t)(vOff + attrOffs[a]));
++		}
++		else
++		{
++			glDisableVertexAttribArray(a);
++		}
++	}
++	if (!useNormal)	glVertexAttrib4f(kAttribNormal, 0, 0, 1, 0);
++	if (!useColor)	glVertexAttrib4f(kAttribColor, S.color[0], S.color[1], S.color[2], S.color[3]);
++	if (!useUV)		glVertexAttrib4f(kAttribUV, 0, 0, 0, 1);
++
++	// Upload indices
++	GLsizeiptr iBytes = (GLsizeiptr) count * indexBytes;
++	GLsizeiptr iOff = RingAlloc(GL_ELEMENT_ARRAY_BUFFER, S.ibo, &S.iboOff, &S.iboCap, iBytes, 4);
++	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, S.ibo);
++	glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, iOff, iBytes, indices);
++
++	// Program
++	int variant = 0;
++	if (S.lighting)						variant |= kFeatLighting;
++	if (useUV)							variant |= kFeatTexture;
++	if (S.fog)							variant |= kFeatFog;
++	if (S.alphaTest && S.alphaFunc != GL_ALWAYS)	variant |= kFeatAlphaTest;
++
++	Program* p = GetProgram(variant);
++	if (S.currentProgram != variant)
++	{
++		glUseProgram(p->program);
++		S.currentProgram = variant;
++	}
++	UploadUniforms(p, variant);
++
++	glDrawElements(mode, count, type, (const void*)(uintptr_t) iOff);
++}
++
++/****************************/
++/*    TEXTURES              */
++/****************************/
++
++static void SetTexKind(GLuint name, uint8_t kind)
++{
++	if ((int) name >= S.texKindsCap)
++	{
++		int newCap = S.texKindsCap ? S.texKindsCap : 256;
++		while (newCap <= (int) name) newCap *= 2;
++		S.texKinds = realloc(S.texKinds, newCap);
++		memset(S.texKinds + S.texKindsCap, 0, newCap - S.texKindsCap);
++		S.texKindsCap = newCap;
++	}
++	S.texKinds[name] = kind;
++}
++
++static uint8_t GetTexKind(GLuint name)
++{
++	if ((int) name < S.texKindsCap)
++		return S.texKinds[name];
++	return kTexKind_None;
++}
++
++void WebGL_BindTexture(GLenum target, GLuint texture)
++{
++	EnsureInit();
++	S.boundTexture = texture;
++	glBindTexture(target, texture);
++}
++
++void WebGL_DeleteTextures(GLsizei n, const GLuint* textures)
++{
++	for (int i = 0; i < n; i++)
++	{
++		if (textures[i] == S.boundTexture)
++			S.boundTexture = 0;
++		SetTexKind(textures[i], kTexKind_None);
++	}
++	glDeleteTextures(n, textures);
++}
++
++void WebGL_TexParameteri(GLenum target, GLenum pname, GLint param)
++{
++	if (param == LGL_CLAMP)
++		param = GL_CLAMP_TO_EDGE;
++	glTexParameteri(target, pname, param);
++}
++
++void WebGL_PixelStorei(GLenum pname, GLint param)
++{
++	EnsureInit();
++	if (pname == LGL_UNPACK_ROW_LENGTH)
++	{
++		S.unpackRowLength = param;
++		return;
++	}
++	if (pname == GL_UNPACK_ALIGNMENT)
++		return;			// we always repack tightly
++	glPixelStorei(pname, param);
++}
++
++// Converts a rectangle of game pixels to the texture's storage format.
++// Returns pointer to a tightly-packed buffer (or NULL if the format is unsupported).
++static const void* ConvertPixels(
++		const void* pixels, int width, int height, int rowLength,
++		GLenum format, GLenum type, bool forceOpaque, uint8_t destKind,
++		GLenum* outFormat, GLenum* outType)
++{
++	if (!pixels)
++		return NULL;
++
++	const int srcPitchPx = rowLength > 0 ? rowLength : width;
++
++	if (type == LGL_UNSIGNED_SHORT_1_5_5_5_REV)
++	{
++		// Source: A1 R5 G5 B5 (bit 15 = alpha)
++		const uint16_t* src = (const uint16_t*) pixels;
++		if (destKind == kTexKind_RGB5A1)
++		{
++			uint16_t* dst = (uint16_t*) PixScratch((size_t) width * height * 2);
++			for (int y = 0; y < height; y++)
++			{
++				const uint16_t* s = src + (size_t) y * srcPitchPx;
++				uint16_t* d = dst + (size_t) y * width;
++				for (int x = 0; x < width; x++)
++				{
++					uint16_t v = s[x];
++					uint16_t a = forceOpaque ? 1 : (v >> 15);
++					d[x] = (uint16_t)(((v & 0x7FFF) << 1) | a);		// -> R5 G5 B5 A1
++				}
++			}
++			*outFormat = GL_RGBA;
++			*outType = GL_UNSIGNED_SHORT_5_5_5_1;
++			return dst;
++		}
++		else
++		{
++			uint8_t* dst = (uint8_t*) PixScratch((size_t) width * height * 4);
++			for (int y = 0; y < height; y++)
++			{
++				const uint16_t* s = src + (size_t) y * srcPitchPx;
++				uint8_t* d = dst + (size_t) y * width * 4;
++				for (int x = 0; x < width; x++)
++				{
++					uint16_t v = s[x];
++					uint8_t r = (v >> 10) & 0x1F, g = (v >> 5) & 0x1F, b = v & 0x1F;
++					d[x*4+0] = (uint8_t)((r << 3) | (r >> 2));
++					d[x*4+1] = (uint8_t)((g << 3) | (g >> 2));
++					d[x*4+2] = (uint8_t)((b << 3) | (b >> 2));
++					d[x*4+3] = (forceOpaque || (v & 0x8000)) ? 255 : 0;
++				}
++			}
++			*outFormat = GL_RGBA;
++			*outType = GL_UNSIGNED_BYTE;
++			return dst;
++		}
++	}
++	else if (format == LGL_BGRA && (type == LGL_UNSIGNED_INT_8_8_8_8 || type == LGL_UNSIGNED_INT_8_8_8_8_REV || type == GL_UNSIGNED_BYTE))
++	{
++		// On little-endian: 8_8_8_8 BGRA == bytes A,R,G,B in memory (classic Mac ARGB).
++		//                   8_8_8_8_REV BGRA / UNSIGNED_BYTE BGRA == bytes B,G,R,A.
++		const uint8_t* src = (const uint8_t*) pixels;
++		uint8_t* dst = (uint8_t*) PixScratch((size_t) width * height * 4);
++		const bool argb = (type == LGL_UNSIGNED_INT_8_8_8_8);
++		for (int y = 0; y < height; y++)
++		{
++			const uint8_t* s = src + (size_t) y * srcPitchPx * 4;
++			uint8_t* d = dst + (size_t) y * width * 4;
++			if (argb)
++			{
++				for (int x = 0; x < width; x++)
++				{
++					d[0] = s[1]; d[1] = s[2]; d[2] = s[3]; d[3] = forceOpaque ? 255 : s[0];
++					s += 4; d += 4;
++				}
++			}
++			else
++			{
++				for (int x = 0; x < width; x++)
++				{
++					d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = forceOpaque ? 255 : s[3];
++					s += 4; d += 4;
++				}
++			}
++		}
++		*outFormat = GL_RGBA;
++		*outType = GL_UNSIGNED_BYTE;
++		return dst;
++	}
++	else if ((format == GL_RGBA || format == GL_RGB) && type == GL_UNSIGNED_BYTE)
++	{
++		const int bpp = (format == GL_RGBA) ? 4 : 3;
++		const uint8_t* src = (const uint8_t*) pixels;
++		uint8_t* dst = (uint8_t*) PixScratch((size_t) width * height * 4);
++		for (int y = 0; y < height; y++)
++		{
++			const uint8_t* s = src + (size_t) y * srcPitchPx * bpp;
++			uint8_t* d = dst + (size_t) y * width * 4;
++			for (int x = 0; x < width; x++)
++			{
++				d[0] = s[0]; d[1] = s[1]; d[2] = s[2];
++				d[3] = (bpp == 4 && !forceOpaque) ? s[3] : 255;
++				s += bpp; d += 4;
++			}
++		}
++		*outFormat = GL_RGBA;
++		*outType = GL_UNSIGNED_BYTE;
++		return dst;
++	}
++
++	printf("[WebGL_FFP] unsupported pixel format 0x%x / type 0x%x\n", format, type);
++	return NULL;
++}
++
++void WebGL_TexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height,
++					  GLint border, GLenum format, GLenum type, const GLvoid* pixels)
++{
++	EnsureInit();
++	(void) border;
++
++	const bool forceOpaque = (internalFormat == GL_RGB || internalFormat == 3);
++	const uint8_t kind = (type == LGL_UNSIGNED_SHORT_1_5_5_5_REV) ? kTexKind_RGB5A1 : kTexKind_RGBA8;
++	const GLenum sizedFormat = (kind == kTexKind_RGB5A1) ? GL_RGB5_A1 : GL_RGBA8;
++
++	GLenum upFormat = GL_RGBA, upType = (kind == kTexKind_RGB5A1) ? GL_UNSIGNED_SHORT_5_5_5_1 : GL_UNSIGNED_BYTE;
++	const void* data = NULL;
++	if (pixels)
++	{
++		data = ConvertPixels(pixels, width, height, S.unpackRowLength, format, type, forceOpaque, kind, &upFormat, &upType);
++	}
++
++	glTexImage2D(target, level, sizedFormat, width, height, 0, upFormat, upType, data);
++	SetTexKind(S.boundTexture, (uint8_t)(kind | (forceOpaque ? kTexFlag_Opaque : 0)));
++}
++
++void WebGL_TexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
++						 GLsizei height, GLenum format, GLenum type, const GLvoid* pixels)
++{
++	EnsureInit();
++	if (width <= 0 || height <= 0)
++		return;
++
++	uint8_t kindBits = GetTexKind(S.boundTexture);
++	const bool forceOpaque = (kindBits & kTexFlag_Opaque) != 0;
++	uint8_t kind = kindBits & ~kTexFlag_Opaque;
++	if (kind == kTexKind_None)
++		kind = kTexKind_RGBA8;
++
++	// If the source is 1555 but the texture is RGBA8 (or vice versa), ConvertPixels picks the right path
++	uint8_t convKind = (type == LGL_UNSIGNED_SHORT_1_5_5_5_REV) ? kind : kTexKind_RGBA8;
++	if (kind == kTexKind_RGB5A1 && type != LGL_UNSIGNED_SHORT_1_5_5_5_REV)
++	{
++		printf("[WebGL_FFP] TexSubImage format mismatch on texture %u\n", S.boundTexture);
++		return;
++	}
++
++	GLenum upFormat, upType;
++	const void* data = ConvertPixels(pixels, width, height, S.unpackRowLength, format, type,
++									 forceOpaque, convKind, &upFormat, &upType);
++	if (!data)
++		return;
++
++	glTexSubImage2D(target, level, xoffset, yoffset, width, height, upFormat, upType, data);
++}
++
++/****************************/
++/*    RESET (CONTEXT LOSS)  */
++/****************************/
++
++void WebGL_FFP_ResetGPUObjects(void)
++{
++	memset(S.programs, 0, sizeof(S.programs));
++	S.currentProgram = -1;
++	S.initialized = false;
++}
