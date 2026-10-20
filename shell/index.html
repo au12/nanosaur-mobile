@@ -30,10 +30,6 @@
 				<div class="plaque" data-plaque="lives"></div>
 				<div class="plaque" data-plaque="health"></div>
 			</div>
-			<div class="hud-group hud-center">
-				<div class="plaque" data-plaque="time"></div>
-				<div class="plaque" data-plaque="score"></div>
-			</div>
 			<div class="hud-group hud-eggs">
 				<div class="plaque" data-plaque="eggs"></div>
 			</div>
@@ -41,6 +37,10 @@
 		<div class="hud-group hud-gear">
 			<div class="plaque" data-plaque="fuel"></div>
 			<div class="plaque" data-plaque="weapon"></div>
+		</div>
+		<div class="hud-group hud-score">
+			<div class="plaque" data-plaque="score"></div>
+			<div class="plaque" data-plaque="time"></div>
 		</div>
 		<div id="pickupHint" class="pickup-hint" hidden></div>
 	</div>
@@ -53,7 +53,7 @@
 		</div>
 		<div id="moveHint" class="move-hint" hidden>
 			<div class="move-hint-finger"></div>
-			<p>Drag anywhere to run</p>
+			<p>Drag to run, tap to jump</p>
 		</div>
 
 		<button class="tbtn tbtn-pause" data-act="pause" aria-label="Pause">
@@ -70,26 +70,28 @@
 		</div>
 
 		<div class="tcluster tcluster-action">
-			<button class="tbtn tbtn-weapon" data-act="weapon" aria-label="Next weapon">
+			<button class="tbtn tbtn-weapon" data-act="weapon" aria-label="Next weapon (hold for previous)">
 				<img id="weaponIcon" alt="" src="hud/weapon-0.png">
 				<span id="weaponAmmo" class="weapon-ammo">0</span>
 			</button>
-			<div class="jet" id="jet" hidden>
-				<button class="tbtn tbtn-jet" data-act="jetup" aria-label="Jetpack thrust up">
-					<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5 4 14h5v5h6v-5h5Z"/></svg>
-				</button>
-				<div class="jet-gauge"><div id="jetFuel" class="jet-fuel"></div></div>
-				<button class="tbtn tbtn-jet" data-act="jetdown" aria-label="Jetpack thrust down">
-					<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19 20 10h-5V5H9v5H4Z"/></svg>
+			<!-- Shown only when they apply: jetpack controls when there's fuel, Throw while carrying an egg -->
+			<div class="tctx">
+				<div class="jet" id="jet" hidden>
+					<button class="tbtn tbtn-jet" data-act="jetup" aria-label="Jetpack thrust up">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5 4 14h5v5h6v-5h5Z"/></svg>
+					</button>
+					<div class="jet-gauge"><div id="jetFuel" class="jet-fuel"></div></div>
+					<button class="tbtn tbtn-jet" data-act="jetdown" aria-label="Jetpack thrust down">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19 20 10h-5V5H9v5H4Z"/></svg>
+					</button>
+				</div>
+				<button class="tbtn tbtn-throw" data-act="throw" aria-label="Throw the egg" hidden>
+					<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-7 4.5-11.5 11-12V4l5 5-5 5v-3.2C11 11 7.6 13.8 5 19Z"/></svg>
+					<span>Throw</span>
 				</button>
 			</div>
-			<button class="tbtn tbtn-jump" data-act="jump" aria-label="Jump">
-				<span class="jump-face">
-					<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 9 11 22h8v4h10v-4h8Z"/><path d="M24 23 11 36h8v3h10v-3h8Z" opacity=".55"/></svg>
-				</span>
-			</button>
 			<button class="tbtn tbtn-fire" data-act="fire" aria-label="Fire">
-				<span class="fire-guard"></span>
+				<span class="fire-bezel"></span>
 				<span class="fire-dome"><span class="fire-label">FIRE</span></span>
 			</button>
 		</div>
@@ -112,11 +114,10 @@
 		<div class="touch-help-card">
 			<h2>Playing on a touchscreen</h2>
 			<ul class="touch-help-list">
-				<li><span class="th-icon th-stick"></span><span><strong>Drag anywhere</strong> to run. Nano heads in the direction you push, and turns when your finger swings around.</span></li>
-				<li><span class="th-icon th-jump"></span><span><strong>Jump</strong> — tap again in mid-air for a double jump.</span></li>
-				<li><span class="th-icon th-fire"></span><span><strong>Fire</strong> — hold for continuous fire. Tap the weapon icon to switch.</span></li>
-				<li><span class="th-icon th-tap"></span><span><strong>Tap</strong> near an egg or rock to pick it up. Tap again to throw.</span></li>
-				<li><span class="th-icon th-cam"></span><span><strong>Second finger</strong> drag left or right to swivel the camera, up or down to zoom.</span></li>
+				<li><span class="th-icon th-stick"></span><span><strong>Drag anywhere</strong> to run. Nano goes the way you push and turns when you swing your finger round. Let go and he stops.</span></li>
+				<li><span class="th-icon th-tap"></span><span><strong>Tap anywhere</strong> to jump, and tap again in mid-air to double jump. While running, tap with a second finger.</span></li>
+				<li><span class="th-icon th-fire"></span><span><strong>Fire</strong>: hold for continuous fire. Tap the weapon icon to switch, or hold it to go back.</span></li>
+				<li><span class="th-icon th-egg"></span><span><strong>Tap next to an egg</strong> to pick it up, then carry it into a time portal. <strong>Throw</strong> appears while you're carrying one.</span></li>
 			</ul>
 			<p class="touch-help-goal">Find the five dinosaur egg species and carry each one into a time portal before the asteroid hits.</p>
 			<button class="btn btn-primary" data-close="touchHelp">Got it</button>

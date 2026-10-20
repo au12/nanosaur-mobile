@@ -250,7 +250,7 @@ export class Settings {
 			this.seg(g, "Vibrate on button press", null, [[false, "Off"], [true, "On"]], p.haptics, (v) => this.shell.set("haptics", v));
 		}
 		const help = this.group(pane, "How it works");
-		this.note(help, "<strong>Drag anywhere</strong> to run in that direction; keep your finger down and swing it around to turn. <strong>Tap</strong> to pick up an egg or rock when you're next to it, and tap again to throw. Drag a <strong>second finger</strong> sideways to swivel the camera, or up and down to zoom. Hold the weapon button to go back a weapon.");
+		this.note(help, "<strong>Drag anywhere</strong> to run that way; keep your finger down and swing it round to turn, and let go to stop. <strong>Tap anywhere</strong> to jump (tap again in mid-air to double jump); while running, tap with a second finger. Tap next to an egg to pick it up, then carry it into a time portal. Hold the weapon button to go back a weapon.");
 		const row = document.createElement("div");
 		row.className = "btn-row";
 		help.append(row);

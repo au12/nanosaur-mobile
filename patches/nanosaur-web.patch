@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index f76a20b..d75cc7b 100644
+index f76a20b..5315445 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -95,7 +95,9 @@ endif()
@@ -38,7 +38,7 @@ index f76a20b..d75cc7b 100644
 +	target_compile_options(Pomme PRIVATE -fexceptions)
 +	set_source_files_properties(${GAME_SRCDIR}/Web/WebGL_FFP.c PROPERTIES COMPILE_DEFINITIONS NANOSAUR_WEBGL_FFP_IMPL=1)
 +
-+	set(WEB_EXPORTED_FUNCTIONS "_main,_malloc,_free,_Web_SetVirtualNeed,_Web_PulseScancode,_Web_SetStick,_Web_SetTouchMode,_Web_TapAt,_Web_Swipe,_Web_PauseChoice,_Web_SetHighScoreName,_Web_ResumeFromQuit,_Web_GetKeyBinding,_Web_GetDefaultKeyBinding,_Web_SetKeyBinding,_Web_ResetKeyBindings,_Web_GetScancodeName,_Web_GetNumRemappableNeeds,_Web_GetPref,_Web_SetPref,_Web_SavePrefs,_Web_PauseGame,_Web_GetMainMenuSelection")
++	set(WEB_EXPORTED_FUNCTIONS "_main,_malloc,_free,_Web_SetVirtualNeed,_Web_PulseScancode,_Web_SetStick,_Web_SetTouchMode,_Web_TapAt,_Web_Swipe,_Web_PauseChoice,_Web_SetHighScoreName,_Web_ResumeFromQuit,_Web_GetKeyBinding,_Web_GetDefaultKeyBinding,_Web_SetKeyBinding,_Web_ResetKeyBindings,_Web_GetScancodeName,_Web_GetNumRemappableNeeds,_Web_GetPref,_Web_SetPref,_Web_SavePrefs,_Web_PauseGame,_Web_GetMainMenuSelection,_Web_DebugState")
 +
 +	target_link_options(${GAME_TARGET} PRIVATE
 +		-fexceptions
@@ -188,179 +188,127 @@ index 551ea99..d2cc30b 100644
 +#endif
  
 diff --git a/src/Player/Player_Control.c b/src/Player/Player_Control.c
-index 97505b2..20b3b1b 100644
+index 97505b2..fef319d 100644
 --- a/src/Player/Player_Control.c
 +++ b/src/Player/Player_Control.c
-@@ -53,6 +53,90 @@ float	gMySpeedPuffCounter;
+@@ -53,6 +53,8 @@ float	gMySpeedPuffCounter;
  #define	ExhaustTimer	SpecialF[0]
  
  
-+#if __EMSCRIPTEN__
-+/****************************/
-+/*  WEB: TOUCH STEERING     */
-+/****************************/
-+//
-+// The touch stick is screen-relative: push in a direction and Nano heads that way.
-+// The camera frame is sampled when the drag starts (and re-sampled whenever the finger
-+// swings to a clearly different direction), so holding a direction runs in a straight
-+// line instead of circling as the chase camera swings around behind the player.
-+//
-+
-+#define TOUCH_STICK_DEADZONE		0.16f
-+#define TOUCH_RESAMPLE_ANGLE		(PI * 50.0f / 180.0f)
-+#define TOUCH_TURN_GAIN				7.0f
-+#define TOUCH_MAX_TURN_SPEED		4.5f
-+#define TOUCH_TURN_DEADBAND			0.10f
-+
-+static bool		gTouchSteerActive = false;
-+static float	gTouchSteerHeading = 0;
-+static float	gTouchSteerMagnitude = 0;
-+static float	gTouchRefCamHeading = 0;
-+static float	gTouchRefStickAngle = 0;
-+
-+static float WrapAngle(float a)
-+{
-+	while (a > PI)	a -= PI2;
-+	while (a < -PI)	a += PI2;
-+	return a;
-+}
-+
-+static float GetCameraHeading(void)
-+{
-+	if (!gGameViewInfoPtr)
-+		return gPlayerObj ? gPlayerObj->Rot.y : 0;
-+	const TQ3Point3D* from	= &gGameViewInfoPtr->cameraPlacement.cameraLocation;
-+	const TQ3Point3D* to	= &gGameViewInfoPtr->cameraPlacement.pointOfInterest;
-+	float dx = to->x - from->x;
-+	float dz = to->z - from->z;
-+	if (fabsf(dx) < 0.001f && fabsf(dz) < 0.001f)
-+		return gPlayerObj ? gPlayerObj->Rot.y : 0;
-+	return atan2f(-dx, -dz);			// facing vector of Rot.y == (-sin, -cos)
-+}
-+
-+static void UpdateTouchSteering(void)
-+{
-+	float sx, sy;
-+	bool held = Web_GetStick(&sx, &sy);
-+	float mag = sqrtf(sx*sx + sy*sy);
-+
-+	if (!held || mag < TOUCH_STICK_DEADZONE || !gPlayerObj)
-+	{
-+		gTouchSteerActive = false;
-+		return;
-+	}
-+
-+	float stickAngle = atan2f(sx, -sy);		// 0 = up (away from camera), +PI/2 = right
-+
-+	if (!gTouchSteerActive
-+		|| fabsf(WrapAngle(stickAngle - gTouchRefStickAngle)) > TOUCH_RESAMPLE_ANGLE)
-+	{
-+		gTouchRefCamHeading = GetCameraHeading();
-+		gTouchRefStickAngle = stickAngle;
-+	}
-+
-+	gTouchSteerActive = true;
-+	gTouchSteerHeading = WrapAngle(gTouchRefCamHeading - stickAngle);		// increasing Rot.y turns left
-+	gTouchSteerMagnitude = SDL_min(1.0f, (mag - TOUCH_STICK_DEADZONE) / (1.0f - TOUCH_STICK_DEADZONE));
-+}
-+
-+static void ApplyTouchSteering(ObjNode* theNode, float slugFactor, float accel)
-+{
-+	if (!gTouchSteerActive)
-+		return;
-+
-+	float diff = WrapAngle(gTouchSteerHeading - theNode->Rot.y);
-+	float rate = SDL_clamp(diff * TOUCH_TURN_GAIN, -TOUCH_MAX_TURN_SPEED, TOUCH_MAX_TURN_SPEED);
-+	theNode->Rot.y += rate * slugFactor * gFramesPerSecondFrac;
-+
-+	if (theNode->Accel > 0)
-+		theNode->Accel = accel * (0.45f + 0.55f * gTouchSteerMagnitude);
-+}
-+#endif
 +
 +
  /****************** CALC PLAYER KEY CONTROLS *********************/
  //
  // Converts keys to key control bits or reads the bit fields from the network.
-@@ -78,6 +162,22 @@ static KeyControlType KeysToControlBits(void)
+@@ -78,6 +80,10 @@ static KeyControlType KeysToControlBits(void)
  {
  	KeyControlType bits = 0;					// init to 0
  
 +#if __EMSCRIPTEN__
-+	UpdateTouchSteering();
-+	if (gTouchSteerActive)
-+	{
-+		// Translate the analog heading into the classic control bits so animations behave
-+		// exactly like keyboard play; the actual turn amount is applied by ApplyTouchSteering.
-+		float diff = WrapAngle(gTouchSteerHeading - gPlayerObj->Rot.y);
-+		if (diff > TOUCH_TURN_DEADBAND)
-+			bits |= KEYCONTROL_ROTLEFT;
-+		else if (diff < -TOUCH_TURN_DEADBAND)
-+			bits |= KEYCONTROL_ROTRIGHT;
-+		if (cosf(diff) > 0.3f)
-+			bits |= KEYCONTROL_FORWARD;
-+	}
++	WebMove_Update();							// touch stick & buffered jumps (Web/WebTouchMove.c)
 +#endif
 +
  	if (GetNeedState(kNeed_TurnLeft))			// rot left
  		bits |= KEYCONTROL_ROTLEFT;
  	else if (GetNeedState(kNeed_TurnRight))		// rot right
-@@ -138,6 +238,9 @@ Byte		currentAnim;
+@@ -105,6 +111,10 @@ static KeyControlType KeysToControlBits(void)
+ 	if (GetNeedState(kNeed_PickUp))				// try pickup
+ 		bits |= KEYCONTROL_PICKUP;
+ 
++#if __EMSCRIPTEN__
++	bits = WebMove_AdjustControlBits(bits);
++#endif
++
+ 	return(bits);
+ }
+ 
+@@ -138,6 +148,9 @@ Byte		currentAnim;
  				
  	if (bits & KEYCONTROL_ROTLEFT)
  	{
 +#if __EMSCRIPTEN__
-+		if (!gTouchSteerActive)
++		if (!WebMove_IsSteering())
 +#endif
  		theNode->Rot.y += 2.0f*slugFactor*gFramesPerSecondFrac;				
  		
  			/* IF SLOW ENOUGH, THEN DO LEFT TURN ANIM */
-@@ -166,6 +269,9 @@ Byte		currentAnim;
+@@ -166,6 +179,9 @@ Byte		currentAnim;
  	else
  	if (bits & KEYCONTROL_ROTRIGHT)
  	{
 +#if __EMSCRIPTEN__
-+		if (!gTouchSteerActive)
++		if (!WebMove_IsSteering())
 +#endif
  		theNode->Rot.y -= 2.0f*slugFactor*gFramesPerSecondFrac;
  
  			/* IF SLOW ENOUGH, THEN DO RIGHT TURN ANIM */
-@@ -211,6 +317,10 @@ Byte		currentAnim;
+@@ -211,6 +227,10 @@ Byte		currentAnim;
  		theNode->Accel = (-PLAYER_WALK_ACCEL*slugFactor);
  	else
  		theNode->Accel = 0;
 +
 +#if __EMSCRIPTEN__
-+	ApplyTouchSteering(theNode, slugFactor, theNode->Accel);
++	WebMove_ApplyTurn(theNode, false);
 +#endif
  	
  	
  	
-@@ -300,7 +410,12 @@ KeyControlType	bits;
+@@ -236,6 +256,9 @@ Byte		currentAnim;
+ 			if ((gDelta.y < 450.0f) && (gDelta.y > -300.0f))							// only double-jump at apex of other jump
+ 			{
+ 				gDelta.y = PLAYER_JUMP_SPEED;
++#if __EMSCRIPTEN__
++				WebMove_OnJumped();
++#endif
+ 				MorphToSkeletonAnim(theNode->Skeleton,PLAYER_ANIM_JUMP2,4.0);
+ 				PlayEffect_Parms(EFFECT_JUMP,FULL_CHANNEL_VOLUME/2,kMiddleC+4);
+ 			}
+@@ -246,6 +269,9 @@ Byte		currentAnim;
+ 			if (theNode->StatusBits & STATUS_BIT_ONGROUND)					// must be on ground
+ 			{
+ 				gDelta.y = PLAYER_JUMP_SPEED;
++#if __EMSCRIPTEN__
++				WebMove_OnJumped();
++#endif
+ 				SetSkeletonAnim(theNode->Skeleton,PLAYER_ANIM_JUMP1);
+ 				PlayEffect_Parms(EFFECT_JUMP,FULL_CHANNEL_VOLUME/2,kMiddleC);
+ 			}
+@@ -300,7 +326,12 @@ KeyControlType	bits;
  	bits = gMyControlBits;											// get player control bits
  
  			/* SEE IF ROTATE PLAYER LEFT  */
 -				
 +
 +#if __EMSCRIPTEN__
-+	if (gTouchSteerActive)
-+		;	// handled by ApplyTouchSteering below
++	if (WebMove_IsSteering())
++		;	// handled by WebMove_ApplyTurn below
 +	else
 +#endif
  	if (bits & KEYCONTROL_ROTLEFT)
  		theNode->Rot.y += 2*gFramesPerSecondFrac;						
  	
-@@ -321,6 +436,10 @@ KeyControlType	bits;
+@@ -321,6 +352,10 @@ KeyControlType	bits;
  	else
  		theNode->Accel = 0;
  
 +#if __EMSCRIPTEN__
-+	ApplyTouchSteering(theNode, 0.8f, theNode->Accel);
++	WebMove_ApplyTurn(theNode, true);
 +#endif
 +
  
  			/* SEE IF CHANGE ATTACK MODE */
  
+@@ -380,6 +415,10 @@ float	sumDX,sumDY,sumDZ,maxSpeed;
+ 
+ 	fps = gFramesPerSecondFrac;
+ 
++#if __EMSCRIPTEN__
++	WebMove_ShapeVelocity(theNode);				// touch: steer velocity / stop on release (zeroes Accel)
++#endif
++
+ 			/* CALC AIM VECTOR */
+ 			
+ 	r = theNode->Rot.y;
 diff --git a/src/QD3D/Renderer.c b/src/QD3D/Renderer.c
 index 6638f52..3c7ab65 100644
 --- a/src/QD3D/Renderer.c
@@ -1136,10 +1084,10 @@ index 9a77264..9a0d871 100644
  		SDL_SetWindowFullscreen(gSDLWindow, 0);
 diff --git a/src/Web/Web.h b/src/Web/Web.h
 new file mode 100644
-index 0000000..662052c
+index 0000000..2e1e2b4
 --- /dev/null
 +++ b/src/Web/Web.h
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,99 @@
 +// WEB.H
 +// Interface between the game code and the browser shell (Emscripten build only).
 +
@@ -1224,6 +1172,16 @@ index 0000000..662052c
 +void	Web_ApplyHUDStyleLive(void);
 +bool	Web_ConsumeSettingsDirty(void);
 +
++// Touch locomotion (WebTouchMove.c)
++struct ObjNode;
++void	WebMove_Update(void);
++bool	WebMove_IsSteering(void);
++uint16_t WebMove_AdjustControlBits(uint16_t bits);
++void	WebMove_RequestJump(void);
++void	WebMove_OnJumped(void);
++void	WebMove_ApplyTurn(struct ObjNode* theNode, bool jetpack);
++bool	WebMove_ShapeVelocity(struct ObjNode* theNode);
++
 +#ifdef __cplusplus
 +}
 +#endif
@@ -1231,10 +1189,10 @@ index 0000000..662052c
 +#endif
 diff --git a/src/Web/WebBridge.c b/src/Web/WebBridge.c
 new file mode 100644
-index 0000000..47bb52e
+index 0000000..a26b073
 --- /dev/null
 +++ b/src/Web/WebBridge.c
-@@ -0,0 +1,748 @@
+@@ -0,0 +1,771 @@
 +// WEBBRIDGE.C
 +// Glue between Nanosaur and the browser shell: frame pacing, persistent storage,
 +// virtual (touch) input, HUD export and assorted screen hooks.
@@ -1541,7 +1499,7 @@ index 0000000..47bb52e
 +			&& node->CBits)
 +		{
 +			float d = CalcQuickDistance(mouth.x, mouth.z, node->Coord.x, node->Coord.z);
-+			if (d <= node->PickUpCollisionRadius + 70.0f
++			if (d <= node->PickUpCollisionRadius + 40.0f
 +				&& fabsf(node->Coord.y - gPlayerObj->Coord.y) < 250.0f)
 +			{
 +				return true;
@@ -1566,10 +1524,11 @@ index 0000000..47bb52e
 +	cur[5] = gWeaponInventory[gCurrentAttackMode];
 +	cur[6] = INFOBAR_FRAMENUM_FUELGAUGE + (int) (MAX_FUEL_CAPACITY - gFuel);
 +
++	// Eggs recovered per species, 4 bits each (the game needs one of each of the 5 species,
++	// but every extra egg beamed up still counts for points, so the HUD shows the tally)
 +	int eggs = 0;
 +	for (int i = 0; i < NUM_EGG_SPECIES; i++)
-+		if (gRecoveredEggs[i])
-+			eggs |= 1 << i;
++		eggs |= SDL_min((int) gRecoveredEggs[i], 15) << (4 * i);
 +	cur[7] = eggs;
 +
 +	int flags = 0;
@@ -1775,9 +1734,11 @@ index 0000000..47bb52e
 +	switch (gWebScreen)
 +	{
 +		case kWebScreen_Game:
-+			// Tap = pick up / throw, but only when it would do something
-+			if (gPlayerObj && ((gPlayerObj->StatusBits & STATUS_BIT_ISCARRYING) || Web_IsPickupNearby()))
++			// Tap anywhere = jump, unless an egg is right there to pick up
++			if (gPlayerObj && !(gPlayerObj->StatusBits & STATUS_BIT_ISCARRYING) && Web_IsPickupNearby())
 +				Web_SetVirtualNeed(kNeed_PickUp, 2);
++			else
++				WebMove_RequestJump();
 +			break;
 +
 +		case kWebScreen_MainMenu:
@@ -1977,6 +1938,26 @@ index 0000000..47bb52e
 +{
 +	if (gWebScreen == kWebScreen_Game)
 +		Web_SetVirtualNeed(kNeed_UIPause, 2);
++}
++
++// Diagnostics for the shell's ?debug overlay and automated control tests:
++// [rotY, speed, deltaX, deltaZ, anim, x, z, deltaY]
++EMSCRIPTEN_KEEPALIVE float* Web_DebugState(void)
++{
++	static float st[8];
++	SDL_memset(st, 0, sizeof(st));
++	if (gPlayerObj && gTerrainPtr)
++	{
++		st[0] = gPlayerObj->Rot.y;
++		st[1] = gPlayerObj->Speed;
++		st[2] = gPlayerObj->Delta.x;
++		st[3] = gPlayerObj->Delta.z;
++		st[4] = gPlayerObj->Skeleton ? gPlayerObj->Skeleton->AnimNum : -1;
++		st[5] = gPlayerObj->Coord.x;
++		st[6] = gPlayerObj->Coord.z;
++		st[7] = gPlayerObj->Delta.y;
++	}
++	return st;
 +}
 +
 +EMSCRIPTEN_KEEPALIVE int Web_GetMainMenuSelection(void)
@@ -3388,4 +3369,345 @@ index 0000000..36afea3
 +	memset(S.programs, 0, sizeof(S.programs));
 +	S.currentProgram = -1;
 +	S.initialized = false;
++}
+diff --git a/src/Web/WebTouchMove.c b/src/Web/WebTouchMove.c
+new file mode 100644
+index 0000000..c96ef6d
+--- /dev/null
++++ b/src/Web/WebTouchMove.c
+@@ -0,0 +1,335 @@
++// WEBTOUCHMOVE.C
++// Touch locomotion for the web port.
++//
++// The on-screen stick gives a direction relative to the camera. When the finger starts
++// pushing, the camera's heading is locked as the reference (using the camera's *target*
++// heading behind Nano, not its lagging position, so pushing straight up never veers).
++// Nano turns smoothly toward the pushed direction and runs that way for as long as the
++// finger is held; swinging the finger round turns him without lifting it.
++//
++// Unlike the keyboard's tank controls, Nano's velocity follows his facing (no skating
++// sideways after a turn), speed follows how far the stick is pushed, and lifting the
++// finger brings him to a stop almost immediately.
++//
++// Taps are jumps: a jump request is buffered briefly so a tap in mid-air fires the double
++// jump as soon as the game allows it, instead of being lost if it came a little early.
++
++#include "game.h"
++
++/****************************/
++/*    CONSTANTS             */
++/****************************/
++
++#define STICK_DEADZONE			0.14f
++#define STICK_FULL				0.85f		// stick deflection that already counts as full speed
++#define RELOCK_DELAY			0.12f		// seconds in the deadzone before the reference is released
++
++#define GROUND_TURN_GAIN		12.0f		// rad/s of turn per rad of heading error
++#define GROUND_TURN_MAX			8.0f		// rad/s
++#define AIR_TURN_GAIN			8.0f
++#define AIR_TURN_MAX			4.5f
++#define JET_TURN_MAX			3.0f
++
++#define GROUND_ACCEL			2600.0f		// speeding up toward the target speed
++#define GROUND_DECEL			3200.0f		// slowing down toward the target speed
++#define GROUND_GRIP				14.0f		// how fast sideways sliding is cancelled (1/s)
++#define AIR_ACCEL				900.0f
++#define AIR_GRIP				2.5f
++
++#define RELEASE_BRAKE			18.0f		// 1/s exponential stop when the finger lifts
++#define RELEASE_STOP_SPEED		25.0f
++
++#define TURN_IN_PLACE_SPEED		120.0f		// below this speed, big heading changes use the turn anims
++#define TURN_IN_PLACE_ANGLE		0.45f
++
++#define JUMP_BUFFER_GROUND		0.20f
++#define JUMP_BUFFER_AIR			0.55f		// waiting for the double-jump window to open
++#define JUMP_BUFFER_LANDING		0.12f		// too late for a double jump: jump again only if about to land
++#define DOUBLE_JUMP_MIN_VY		(-300.0f)	// matches DoPlayerControl's double-jump window
++
++/****************************/
++/*    STATE                 */
++/****************************/
++
++static bool		gSteering = false;			// finger outside the deadzone
++static bool		gLocked = false;			// reference heading locked for this push
++static float	gRefHeading = 0;
++static float	gTargetHeading = 0;
++static float	gThrottle = 0;				// 0..1
++static float	gDeadzoneTime = 0;
++static float	gJumpBuffer = 0;
++
++/****************************/
++/*    HELPERS               */
++/****************************/
++
++static float WrapAngle(float a)
++{
++	a = fmodf(a + PI, PI2);
++	if (a < 0)
++		a += PI2;
++	return a - PI;
++}
++
++static float Approach(float value, float target, float upRate, float downRate, float dt)
++{
++	if (value < target)
++		return SDL_min(target, value + upRate * dt);
++	else
++		return SDL_max(target, value - downRate * dt);
++}
++
++// Heading the chase camera is heading toward (no lag): straight behind Nano, plus any swivel
++static float GetIdealCameraHeading(void)
++{
++	float h = gPlayerObj->Rot.y;
++	if (gCameraMode == CAMERA_MODE_MANUAL)
++		h += gCameraViewYAngle;
++	return h;
++}
++
++static bool IsGroundLocomotionAnim(int anim)
++{
++	return anim == PLAYER_ANIM_STAND
++		|| anim == PLAYER_ANIM_WALK
++		|| anim == PLAYER_ANIM_TURNLEFT
++		|| anim == PLAYER_ANIM_TURNRIGHT;
++}
++
++static bool IsAirAnim(int anim)
++{
++	return anim == PLAYER_ANIM_JUMP1
++		|| anim == PLAYER_ANIM_JUMP2
++		|| anim == PLAYER_ANIM_FALLING;
++}
++
++/****************************/
++/*    PER-FRAME INPUT       */
++/****************************/
++
++void WebMove_Update(void)
++{
++	float dt = gFramesPerSecondFrac;
++
++	if (gJumpBuffer > 0)
++	{
++		gJumpBuffer -= dt;
++
++		// Once the double-jump window has passed, only keep the request if we're about to land
++		if (gPlayerObj && gPlayerObj->Delta.y < DOUBLE_JUMP_MIN_VY && gJumpBuffer > JUMP_BUFFER_LANDING
++			&& !(gPlayerObj->StatusBits & STATUS_BIT_ONGROUND))
++		{
++			gJumpBuffer = JUMP_BUFFER_LANDING;
++		}
++	}
++
++	float sx = 0, sy = 0;
++	bool held = Web_GetStick(&sx, &sy) && gPlayerObj && !gPlayerGotKilledFlag;
++	float mag = sqrtf(sx*sx + sy*sy);
++
++	if (!held || mag < STICK_DEADZONE)
++	{
++		gSteering = false;
++		gThrottle = 0;
++
++		// Keep the reference for a moment so a finger swinging through the center doesn't re-aim
++		gDeadzoneTime += dt;
++		if (!held || gDeadzoneTime > RELOCK_DELAY)
++			gLocked = false;
++		return;
++	}
++
++	gDeadzoneTime = 0;
++
++	if (!gLocked)
++	{
++		gRefHeading = GetIdealCameraHeading();
++		gLocked = true;
++	}
++
++	float stickAngle = atan2f(sx, -sy);				// 0 = up the screen, +PI/2 = right
++	gTargetHeading = WrapAngle(gRefHeading - stickAngle);	// increasing Rot.y turns left
++
++	float t = (mag - STICK_DEADZONE) / (STICK_FULL - STICK_DEADZONE);
++	t = SDL_clamp(t, 0.0f, 1.0f);
++	gThrottle = 0.30f + 0.70f * t;					// even a light push walks at a useful pace
++	gSteering = true;
++}
++
++bool WebMove_IsSteering(void)
++{
++	return gSteering;
++}
++
++KeyControlType WebMove_AdjustControlBits(KeyControlType bits)
++{
++	if (gSteering && gPlayerObj)
++	{
++		float diff = WrapAngle(gTargetHeading - gPlayerObj->Rot.y);
++
++		bits &= ~(KEYCONTROL_ROTLEFT | KEYCONTROL_ROTRIGHT | KEYCONTROL_BACKWARD);
++		bits |= KEYCONTROL_FORWARD;
++
++		// Turning on the spot: use the game's turn animations
++		if (fabsf(gPlayerObj->Speed) < TURN_IN_PLACE_SPEED
++			&& fabsf(diff) > TURN_IN_PLACE_ANGLE
++			&& (gPlayerObj->StatusBits & STATUS_BIT_ONGROUND))
++		{
++			bits |= (diff > 0) ? KEYCONTROL_ROTLEFT : KEYCONTROL_ROTRIGHT;
++		}
++	}
++
++	if (gJumpBuffer > 0)
++		bits |= KEYCONTROL_JUMP;
++
++	return bits;
++}
++
++/****************************/
++/*    JUMP                  */
++/****************************/
++
++void WebMove_RequestJump(void)
++{
++	if (!gPlayerObj || !gPlayerObj->Skeleton)
++		return;
++
++	int anim = gPlayerObj->Skeleton->AnimNum;
++
++	if (anim == PLAYER_ANIM_JUMP2)						// double jump already used
++		return;
++
++	if (anim == PLAYER_ANIM_JUMP1 || anim == PLAYER_ANIM_FALLING)
++	{
++		if (gPlayerObj->Delta.y >= DOUBLE_JUMP_MIN_VY)
++			gJumpBuffer = JUMP_BUFFER_AIR;				// fire the double jump as soon as it's allowed
++		else
++			gJumpBuffer = JUMP_BUFFER_LANDING;			// window missed; jump on landing if it's imminent
++	}
++	else
++		gJumpBuffer = JUMP_BUFFER_GROUND;
++}
++
++void WebMove_OnJumped(void)
++{
++	gJumpBuffer = 0;
++}
++
++/****************************/
++/*    TURNING               */
++/****************************/
++
++void WebMove_ApplyTurn(ObjNode* theNode, bool jetpack)
++{
++	if (!gSteering)
++		return;
++
++	int anim = theNode->Skeleton ? theNode->Skeleton->AnimNum : PLAYER_ANIM_STAND;
++	bool air = jetpack || IsAirAnim(anim);
++
++	float gain = air ? AIR_TURN_GAIN : GROUND_TURN_GAIN;
++	float maxRate = jetpack ? JET_TURN_MAX : (air ? AIR_TURN_MAX : GROUND_TURN_MAX);
++
++	float diff = WrapAngle(gTargetHeading - theNode->Rot.y);
++	float rate = SDL_clamp(diff * gain, -maxRate, maxRate);
++	float step = rate * gFramesPerSecondFrac;
++
++	if (fabsf(step) > fabsf(diff))					// don't overshoot at low frame rates
++		step = diff;
++
++	theNode->Rot.y += step;
++
++	if (jetpack)
++		theNode->Accel = PLAYER_WALK_ACCEL * 0.3f * gThrottle * SDL_max(0.0f, cosf(diff));
++}
++
++/****************************/
++/*    VELOCITY              */
++/****************************/
++//
++// Called from DoPlayerMovement before the walking vector is applied.
++// Returns true if it took over the player's horizontal velocity (the caller then skips
++// the keyboard-style acceleration).
++//
++
++bool WebMove_ShapeVelocity(ObjNode* theNode)
++{
++	if (!Web_IsTouchMode() || !theNode->Skeleton)
++		return false;
++
++	const float dt = gFramesPerSecondFrac;
++	const int anim = theNode->Skeleton->AnimNum;
++	const bool onGround = (theNode->StatusBits & STATUS_BIT_ONGROUND) != 0;
++
++	if (theNode->JetThrust)
++		return false;									// jetpack keeps its own floaty physics
++
++	/* FINGER DOWN: STEER */
++
++	if (gSteering && (IsGroundLocomotionAnim(anim) || IsAirAnim(anim)))
++	{
++		const bool air = IsAirAnim(anim) || !onGround;
++
++		float r = theNode->Rot.y;
++		float fx = -sinf(r), fz = -cosf(r);				// facing
++
++		float forward = gDelta.x * fx + gDelta.z * fz;
++		float latX = gDelta.x - forward * fx;
++		float latZ = gDelta.z - forward * fz;
++
++		float diff = WrapAngle(gTargetHeading - r);
++		float align = SDL_max(0.0f, cosf(diff));
++		align *= align;									// mostly turn first, then run
++
++		float maxSpeed = PLAYER_MAX_WALK_SPEED;
++		if ((gMyLatestTileAttribs & (TILE_ATTRIB_WATER|TILE_ATTRIB_LAVA)) && onGround)
++			maxSpeed *= 0.5f;
++
++		float target = maxSpeed * gThrottle * align;
++
++		if (air)
++		{
++			if (forward < target)						// in the air: can speed up, never brakes
++				forward = SDL_min(target, forward + AIR_ACCEL * dt);
++			float keep = expf(-AIR_GRIP * dt);
++			latX *= keep;
++			latZ *= keep;
++		}
++		else
++		{
++			forward = Approach(forward, target, GROUND_ACCEL, GROUND_DECEL, dt);
++			float keep = expf(-GROUND_GRIP * dt);
++			latX *= keep;
++			latZ *= keep;
++		}
++
++		gDelta.x = forward * fx + latX;
++		gDelta.z = forward * fz + latZ;
++		theNode->Accel = 0;
++		return true;
++	}
++
++	/* FINGER UP: STOP */
++
++	bool keyboardMoving = GetNeedState(kNeed_Forward) || GetNeedState(kNeed_Backward);
++	bool brakeAnim = IsGroundLocomotionAnim(anim)
++		|| anim == PLAYER_ANIM_LANDING
++		|| anim == PLAYER_ANIM_PICKUP
++		|| anim == PLAYER_ANIM_THROW;
++
++	if (!keyboardMoving && onGround && brakeAnim && !(gMyLatestPathTileNum & PATH_TILE_SLOPEFORCE))
++	{
++		float keep = expf(-RELEASE_BRAKE * dt);
++		gDelta.x *= keep;
++		gDelta.z *= keep;
++		if (gDelta.x * gDelta.x + gDelta.z * gDelta.z < RELEASE_STOP_SPEED * RELEASE_STOP_SPEED)
++		{
++			gDelta.x = 0;
++			gDelta.z = 0;
++		}
++		theNode->Accel = 0;
++		return true;
++	}
++
++	return false;
 +}

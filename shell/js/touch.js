@@ -1,21 +1,22 @@
 // Touch controls.
 //
-// Movement: put a finger down anywhere that isn't a button and push. A floating stick
-// appears under the finger; Nano runs in the pushed direction for as long as it's held.
-// If the finger keeps travelling past the rim, the stick's base follows it, so swinging
-// the finger round to a new direction turns Nano without having to lift and re-place it.
+// Movement: put a finger down anywhere that isn't a button and push. A stick appears under
+// the finger and Nano runs the way you push for as long as you hold it; swing the finger
+// round without lifting and he turns with it. Lift the finger and he stops.
 //
-// A quick tap (anywhere off the buttons) picks up / throws when something is in reach.
-// A second finger dragged sideways swivels the camera; dragged up or down, it zooms.
+// Jump: tap anywhere. While you're already running, a second finger tapping anywhere jumps
+// immediately. A tap next to an egg picks it up instead.
+//
+// Built on raw touch events: every event is reconciled against the browser's list of
+// fingers actually on the glass, so a lost "touchend" can never leave Nano running.
 
 import { NEED, HUD_FLAG } from "./constants.js";
 
-const TAP_MAX_MS = 280;
-const TAP_MAX_MOVE = 12;
-const STICK_ACTIVATE = 7;
-const STICK_FOLLOW = 1.3;		// base follows once the finger is this many radii away
-const CAM_THRESHOLD = 18;
+const TAP_MAX_MS = 300;
+const TAP_MAX_MOVE = 10;
+const STICK_ACTIVATE = 10;
 const SWIPE_MIN = 42;
+const LONG_PRESS_MS = 450;
 
 export class TouchControls {
 	constructor(root, game, shell, env) {
@@ -24,30 +25,43 @@ export class TouchControls {
 		this.shell = shell;
 		this.env = env;
 		this.mode = "off";
-		this.pointers = new Map();
+		this.touches = new Map();		// identifier -> tracked touch
 		this.stickId = null;
-		this.held = new Set();
+		this.held = new Set();			// needs currently held down
 
 		this.stickEl = root.querySelector("#stick");
-		this.knob = this.stickEl.querySelector(".stick-knob");
-		this.base = this.stickEl.querySelector(".stick-base");
 		this.moveHint = root.querySelector("#moveHint");
 		this.weaponBtn = root.querySelector('[data-act="weapon"]');
 		this.weaponIcon = root.querySelector("#weaponIcon");
 		this.weaponAmmo = root.querySelector("#weaponAmmo");
 		this.jet = root.querySelector("#jet");
 		this.jetFuel = root.querySelector("#jetFuel");
+		this.throwBtn = root.querySelector('[data-act="throw"]');
 
-		root.addEventListener("pointerdown", (e) => this.onDown(e));
-		root.addEventListener("pointermove", (e) => this.onMove(e));
-		root.addEventListener("pointerup", (e) => this.onUp(e, false));
-		root.addEventListener("pointercancel", (e) => this.onUp(e, true));
-		root.addEventListener("lostpointercapture", (e) => { if (this.pointers.has(e.pointerId)) this.onUp(e, true); });
+		const opts = { passive: false };
+		root.addEventListener("touchstart", (e) => this.onStart(e), opts);
+		root.addEventListener("touchmove", (e) => this.onMove(e), opts);
+		root.addEventListener("touchend", (e) => this.onEnd(e, false), opts);
+		root.addEventListener("touchcancel", (e) => this.onEnd(e, true), opts);
 
-		for (const btn of root.querySelectorAll(".tbtn")) this.wireButton(btn);
-
+		// Safety net: when the last finger leaves the glass anywhere, nothing may stay held
+		addEventListener("touchend", (e) => { if (e.touches.length === 0 && this.touches.size) this.releaseAll(); });
+		addEventListener("touchcancel", (e) => { if (e.touches.length === 0 && this.touches.size) this.releaseAll(); });
 		document.addEventListener("visibilitychange", () => { if (document.hidden) this.releaseAll(); });
 		addEventListener("blur", () => this.releaseAll());
+		addEventListener("pagehide", () => this.releaseAll());
+
+		// Mouse on a hybrid touchscreen laptop: buttons still work with a pointer
+		for (const btn of root.querySelectorAll(".tbtn")) {
+			btn.addEventListener("pointerdown", (e) => {
+				if (e.pointerType !== "mouse") return;
+				e.preventDefault();
+				this.pressButton("mouse", btn);
+				const up = () => { this.releaseButton("mouse", false); removeEventListener("pointerup", up); };
+				addEventListener("pointerup", up);
+			});
+			btn.addEventListener("contextmenu", (e) => e.preventDefault());
+		}
 	}
 
 	/* ------------------------------------------------------------ mode */
@@ -85,10 +99,9 @@ export class TouchControls {
 	/* ------------------------------------------------------------ HUD feedback */
 
 	onHud(s) {
-		const icon = `hud/weapon-${s.weapon}.png`;
 		if (this.weaponIcon.dataset.w !== String(s.weapon)) {
 			this.weaponIcon.dataset.w = String(s.weapon);
-			this.weaponIcon.src = icon;
+			this.weaponIcon.src = `hud/weapon-${s.weapon}.png`;
 		}
 		this.weaponAmmo.textContent = String(s.ammo);
 		let n = 0;
@@ -103,9 +116,11 @@ export class TouchControls {
 			this.release(NEED.JetUp);
 			this.release(NEED.JetDown);
 		}
+
+		this.throwBtn.hidden = !(s.flags & HUD_FLAG.Carrying);
 	}
 
-	/* ------------------------------------------------------------ helpers */
+	/* ------------------------------------------------------------ needs */
 
 	hold(need) {
 		if (!this.held.has(need)) {
@@ -124,205 +139,233 @@ export class TouchControls {
 	releaseAll() {
 		for (const n of this.held) this.game.need(n, 0);
 		this.held.clear();
-		this.pointers.clear();
+		for (const t of this.touches.values()) {
+			if (t.btn) t.btn.classList.remove("on");
+			if (t.longTimer) clearTimeout(t.longTimer);
+		}
+		this.touches.clear();
 		this.stickId = null;
 		this.stickEl.hidden = true;
 		this.game.stick(0, 0, false);
-		for (const b of this.root.querySelectorAll(".tbtn.on")) b.classList.remove("on");
 	}
 
-	buzz() {
+	buzz(ms = 8) {
 		if (this.shell.prefs.haptics && navigator.vibrate) {
-			try { navigator.vibrate(8); } catch (e) {}
+			try { navigator.vibrate(ms); } catch (e) {}
 		}
 	}
 
-	norm(e) {
+	norm(x, y) {
 		const r = this.root.getBoundingClientRect();
-		return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+		return [(x - r.left) / r.width, (y - r.top) / r.height];
+	}
+
+	ripple(x, y) {
+		const r = this.root.getBoundingClientRect();
+		const el = document.createElement("div");
+		el.className = "tap-ripple";
+		el.style.left = `${x - r.left}px`;
+		el.style.top = `${y - r.top}px`;
+		this.root.append(el);
+		setTimeout(() => el.remove(), 450);
 	}
 
 	/* ------------------------------------------------------------ buttons */
 
-	wireButton(btn) {
+	pressButton(id, btn) {
 		const act = btn.dataset.act;
-		const holdNeed = { fire: NEED.Attack, jump: NEED.Jump, jetup: NEED.JetUp, jetdown: NEED.JetDown }[act];
+		const t = { kind: "button", btn, act, t0: performance.now() };
+		this.touches.set(id, t);
+		btn.classList.add("on");
+		this.buzz(act === "fire" ? 12 : 8);
 
-		btn.addEventListener("pointerdown", (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			try { btn.setPointerCapture(e.pointerId); } catch (err) {}
-			btn.classList.add("on");
-			this.buzz();
-			if (holdNeed !== undefined) {
-				this.hold(holdNeed);
-			} else if (act === "weapon") {
-				btn._t = performance.now();
-				clearTimeout(btn._long);
-				btn._long = setTimeout(() => {
-					btn._longFired = true;
+		switch (act) {
+			case "fire": this.hold(NEED.Attack); break;
+			case "jetup": this.hold(NEED.JetUp); break;
+			case "jetdown": this.hold(NEED.JetDown); break;
+			case "throw": this.game.pulse(NEED.PickUp); break;
+			case "weapon":
+				t.longTimer = setTimeout(() => {
+					t.longFired = true;
 					this.game.pulse(NEED.PrevWeapon);
 					this.buzz();
-				}, 450);
-				btn._longFired = false;
-			}
-		});
-
-		const up = (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			if (!btn.classList.contains("on")) return;
-			btn.classList.remove("on");
-			if (holdNeed !== undefined) {
-				this.release(holdNeed);
-				return;
-			}
-			switch (act) {
-				case "weapon":
-					clearTimeout(btn._long);
-					if (!btn._longFired && e.type === "pointerup") this.game.pulse(NEED.NextWeapon);
-					break;
-				case "pause":	if (e.type === "pointerup") this.game.pause(); break;
-				case "gps":		if (e.type === "pointerup") this.game.pulse(NEED.ToggleGPS); break;
-				case "camera":	if (e.type === "pointerup") this.game.pulse(NEED.CameraMode); break;
-			}
-		};
-		btn.addEventListener("pointerup", up);
-		btn.addEventListener("pointercancel", up);
-		btn.addEventListener("contextmenu", (e) => e.preventDefault());
+				}, LONG_PRESS_MS);
+				break;
+		}
 	}
 
-	/* ------------------------------------------------------------ free-area gestures */
-
-	onDown(e) {
-		if (this.mode === "off" || e.pointerType === "mouse") return;
-		if (e.target.closest(".tbtn")) return;
-		e.preventDefault();
-		try { this.root.setPointerCapture(e.pointerId); } catch (err) {}
-
-		const p = {
-			id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY,
-			t0: performance.now(), moved: 0, role: "tap",
-		};
-
-		if (this.mode === "game") {
-			if (this.stickId === null) {
-				p.role = "stick";
-				p.ax = e.clientX;
-				p.ay = e.clientY;
-				p.active = false;
-				this.stickId = e.pointerId;
-			} else {
-				p.role = "cam";
-			}
-		} else if (this.mode === "menu") {
-			p.role = "swipe";
+	releaseButton(id, cancelled) {
+		const t = this.touches.get(id);
+		if (!t) return;
+		this.touches.delete(id);
+		t.btn.classList.remove("on");
+		switch (t.act) {
+			case "fire": this.release(NEED.Attack); break;
+			case "jetup": this.release(NEED.JetUp); break;
+			case "jetdown": this.release(NEED.JetDown); break;
+			case "weapon":
+				clearTimeout(t.longTimer);
+				if (!t.longFired && !cancelled) this.game.pulse(NEED.NextWeapon);
+				break;
+			case "pause": if (!cancelled) this.game.pause(); break;
+			case "gps": if (!cancelled) this.game.pulse(NEED.ToggleGPS); break;
+			case "camera": if (!cancelled) this.game.pulse(NEED.CameraMode); break;
 		}
-		this.pointers.set(e.pointerId, p);
+	}
+
+	/* ------------------------------------------------------------ touch events */
+
+	reconcile(list) {
+		const live = new Set();
+		for (let i = 0; i < list.length; i++) live.add(list[i].identifier);
+		for (const id of [...this.touches.keys()]) {
+			if (id !== "mouse" && !live.has(id)) this.finish(id, null, true);
+		}
+	}
+
+	onStart(e) {
+		if (this.mode === "off") return;
+		e.preventDefault();
+		this.reconcile(e.touches);
+
+		for (const ct of e.changedTouches) {
+			const target = ct.target && ct.target.closest ? ct.target.closest(".tbtn") : null;
+			if (target && !target.hidden && !target.closest("[hidden]")) {
+				this.pressButton(ct.identifier, target);
+				continue;
+			}
+
+			const t = {
+				kind: "tap", x0: ct.clientX, y0: ct.clientY, x: ct.clientX, y: ct.clientY,
+				t0: performance.now(), moved: 0,
+			};
+
+			if (this.mode === "game") {
+				if (this.stickId === null) {
+					t.kind = "stick";
+					t.ax = ct.clientX;
+					t.ay = ct.clientY;
+					t.active = false;
+					this.stickId = ct.identifier;
+				} else {
+					// Another finger while running: act immediately (jump, or pick up)
+					t.kind = "extra";
+					const [nx, ny] = this.norm(ct.clientX, ct.clientY);
+					this.game.tap(nx, ny);
+					this.ripple(ct.clientX, ct.clientY);
+					this.buzz();
+				}
+			} else if (this.mode === "menu") {
+				t.kind = "swipe";
+			}
+			this.touches.set(ct.identifier, t);
+		}
 	}
 
 	onMove(e) {
-		const p = this.pointers.get(e.pointerId);
-		if (!p) return;
+		if (this.mode === "off") return;
 		e.preventDefault();
-		p.x = e.clientX;
-		p.y = e.clientY;
-		p.moved = Math.max(p.moved, Math.hypot(p.x - p.x0, p.y - p.y0));
+		this.reconcile(e.touches);
 
-		if (p.role === "stick") this.updateStick(p);
-		else if (p.role === "cam") this.updateCamera(p);
-		else if (p.role === "swipe" && !p.swiped) {
-			const dx = p.x - p.x0, dy = p.y - p.y0;
-			if (Math.abs(dx) > SWIPE_MIN && Math.abs(dx) > Math.abs(dy) * 1.2) {
-				p.swiped = true;
-				this.game.swipe(dx < 0 ? 1 : -1);
-				this.buzz();
+		for (const ct of e.changedTouches) {
+			const t = this.touches.get(ct.identifier);
+			if (!t || t.kind === "button" || t.kind === "extra") continue;
+			t.x = ct.clientX;
+			t.y = ct.clientY;
+			t.moved = Math.max(t.moved, Math.hypot(t.x - t.x0, t.y - t.y0));
+
+			if (t.kind === "stick") this.updateStick(t);
+			else if (t.kind === "swipe" && !t.swiped) {
+				const dx = t.x - t.x0, dy = t.y - t.y0;
+				if (Math.abs(dx) > SWIPE_MIN && Math.abs(dx) > Math.abs(dy) * 1.2) {
+					t.swiped = true;
+					this.game.swipe(dx < 0 ? 1 : -1);
+					this.buzz();
+				}
 			}
 		}
 	}
 
-	onUp(e, cancelled) {
-		const p = this.pointers.get(e.pointerId);
-		if (!p) return;
-		this.pointers.delete(e.pointerId);
+	onEnd(e, cancelled) {
+		if (this.mode === "off") return;
+		e.preventDefault();
+		for (const ct of e.changedTouches) this.finish(ct.identifier, ct, cancelled);
+		this.reconcile(e.touches);
+	}
 
-		const quick = performance.now() - p.t0 < TAP_MAX_MS && p.moved < TAP_MAX_MOVE;
+	finish(id, ct, cancelled) {
+		const t = this.touches.get(id);
+		if (!t) return;
+		if (t.kind === "button") {
+			this.releaseButton(id, cancelled);
+			return;
+		}
+		this.touches.delete(id);
 
-		if (p.role === "stick") {
+		const quick = performance.now() - t.t0 < TAP_MAX_MS && t.moved < TAP_MAX_MOVE;
+
+		if (t.kind === "stick") {
 			this.stickId = null;
 			this.stickEl.hidden = true;
 			this.game.stick(0, 0, false);
-		} else if (p.role === "cam") {
-			this.release(NEED.CameraLeft);
-			this.release(NEED.CameraRight);
-			this.release(NEED.ZoomIn);
-			this.release(NEED.ZoomOut);
-		}
-
-		if (!cancelled && quick && !p.swiped && (p.role !== "stick" || !p.active)) {
-			const [nx, ny] = this.norm(e);
-			this.game.tap(nx, ny);
+			if (!cancelled && quick && !t.active) this.tapAt(t.x, t.y);
+		} else if (t.kind === "tap" || t.kind === "swipe") {
+			if (!cancelled && quick && !t.swiped) this.tapAt(t.x, t.y);
 		}
 	}
 
-	updateStick(p) {
+	tapAt(x, y) {
+		const [nx, ny] = this.norm(x, y);
+		this.game.tap(nx, ny);
+		if (this.mode === "game") {
+			this.ripple(x, y);
+			this.buzz();
+		}
+	}
+
+	/* ------------------------------------------------------------ stick */
+
+	stickRadius() {
+		const ui = { s: 0.85, m: 1, l: 1.18 }[this.shell.prefs.ctlSize] || 1;
+		return 58 * ui;
+	}
+
+	updateStick(t) {
 		const R = this.stickRadius();
-		let dx = p.x - p.ax, dy = p.y - p.ay;
+		let dx = t.x - t.ax, dy = t.y - t.ay;
 		let d = Math.hypot(dx, dy);
 
-		if (!p.active) {
+		if (!t.active) {
 			if (d < STICK_ACTIVATE) return;
-			p.active = true;
+			t.active = true;
 			this.stickEl.hidden = false;
 			this.hideMoveHint();
 		}
 
-		// Let the base trail the finger so direction changes register without lifting
-		const maxD = R * STICK_FOLLOW;
-		if (d > maxD) {
-			const k = (d - maxD) / d;
-			p.ax += dx * k;
-			p.ay += dy * k;
-			dx = p.x - p.ax;
-			dy = p.y - p.ay;
-			d = maxD;
+		// The base trails the finger once it passes the rim, so a change of direction
+		// registers straight away instead of after travelling back across the circle.
+		if (d > R) {
+			const k = (d - R) / d;
+			t.ax += dx * k;
+			t.ay += dy * k;
+			dx = t.x - t.ax;
+			dy = t.y - t.ay;
+			d = R;
 		}
 
 		const mag = Math.min(1, d / R);
 		const ux = d > 0 ? dx / d : 0, uy = d > 0 ? dy / d : 0;
-		const kx = ux * Math.min(d, R), ky = uy * Math.min(d, R);
 
 		const r = this.root.getBoundingClientRect();
-		const bx = p.ax - r.left, by = p.ay - r.top;
-		this.stickEl.style.setProperty("--bx", `${bx}px`);
-		this.stickEl.style.setProperty("--by", `${by}px`);
-		this.stickEl.style.setProperty("--kx", `${bx + kx}px`);
-		this.stickEl.style.setProperty("--ky", `${by + ky}px`);
-		this.stickEl.style.setProperty("--ang", `${Math.atan2(ux, -uy)}rad`);
-		this.stickEl.style.setProperty("--mag", mag > 0.2 ? "1" : "0");
+		const bx = t.ax - r.left, by = t.ay - r.top;
+		const s = this.stickEl.style;
+		s.setProperty("--bx", `${bx}px`);
+		s.setProperty("--by", `${by}px`);
+		s.setProperty("--kx", `${bx + ux * d}px`);
+		s.setProperty("--ky", `${by + uy * d}px`);
+		s.setProperty("--ang", `${Math.atan2(ux, -uy)}rad`);
+		s.setProperty("--mag", mag > 0.2 ? "1" : "0");
 
 		this.game.stick(ux * mag, uy * mag, true);
-	}
-
-	stickRadius() {
-		const ui = { s: 0.85, m: 1, l: 1.18 }[this.shell.prefs.ctlSize] || 1;
-		return 62 * ui;
-	}
-
-	updateCamera(p) {
-		const dx = p.x - p.x0, dy = p.y - p.y0;
-		const horizontal = Math.abs(dx) >= Math.abs(dy);
-		if (horizontal && Math.abs(dx) > CAM_THRESHOLD) {
-			this.release(NEED.ZoomIn); this.release(NEED.ZoomOut);
-			if (dx > 0) { this.release(NEED.CameraLeft); this.hold(NEED.CameraRight); }
-			else { this.release(NEED.CameraRight); this.hold(NEED.CameraLeft); }
-		} else if (!horizontal && Math.abs(dy) > CAM_THRESHOLD) {
-			this.release(NEED.CameraLeft); this.release(NEED.CameraRight);
-			if (dy < 0) { this.release(NEED.ZoomOut); this.hold(NEED.ZoomIn); }
-			else { this.release(NEED.ZoomIn); this.hold(NEED.ZoomOut); }
-		} else {
-			this.release(NEED.CameraLeft); this.release(NEED.CameraRight);
-			this.release(NEED.ZoomIn); this.release(NEED.ZoomOut);
-		}
 	}
 }

@@ -63,6 +63,15 @@ export class Hud {
 				}
 				case "eggs":
 					refs.eggs = slots.eggs.map(([x, y], i) => addSprite("egg-sprite", x, y, 26, 41, `hud/egg-${i}.png`));
+					refs.counts = slots.eggs.map(([x, y]) => {
+						const c = document.createElement("span");
+						c.className = "egg-count";
+						c.style.setProperty("--sx", x + 15);
+						c.style.setProperty("--sy", y + 27);
+						c.hidden = true;
+						plaque.append(c);
+						return c;
+					});
 					break;
 				case "weapon":
 					refs.icon = addSprite("weapon-icon", slots.icon[0][0], slots.icon[0][1], 64, 64, "hud/weapon-0.png");
@@ -132,8 +141,21 @@ export class Hud {
 
 		e.health.meter.style.setProperty("--fill", `${(s.health / 10).toFixed(1)}%`);
 
-		e.eggs.eggs.forEach((img, i) => img.classList.toggle("on", !!(s.eggs & (1 << i))));
-		if (prev && s.eggs !== prev.eggs) this.bump(e.eggs.plaque);
+		// 4 bits per species: how many eggs of that species have been beamed up
+		e.eggs.eggs.forEach((img, i) => {
+			const n = (s.eggs >> (4 * i)) & 15;
+			const before = prev ? (prev.eggs >> (4 * i)) & 15 : n;
+			img.classList.toggle("on", n > 0);
+			const badge = e.eggs.counts[i];
+			badge.hidden = n < 2;
+			badge.textContent = String(n);
+			if (n > before) {
+				img.classList.remove("flash");
+				void img.offsetWidth;
+				img.classList.add("flash");
+				this.bump(e.eggs.plaque);
+			}
+		});
 
 		const icon = `hud/weapon-${s.weapon}.png`;
 		if (e.weapon.icon.dataset.w !== String(s.weapon)) {
@@ -153,14 +175,14 @@ export class Hud {
 		const carrying = !!(s.flags & HUD_FLAG.Carrying);
 		const near = !!(s.flags & HUD_FLAG.PickupNear);
 		const now = performance.now();
-		if (carrying && !this.wasCarrying) this.carryHintUntil = now + 2600;
+		if (carrying && !this.wasCarrying) this.carryHintUntil = now + 3200;
 		this.wasCarrying = carrying;
 
 		let text = "";
 		if (!(s.flags & (HUD_FLAG.Dead | HUD_FLAG.Paused))) {
 			const key = this.touchMode ? null : (this.keyLabelFor ? this.keyLabelFor() : null);
 			if (carrying && now < this.carryHintUntil) {
-				text = this.touchMode ? "Tap to throw" : key ? `${key} to throw` : "";
+				text = "Carry it into a time portal";
 			} else if (near && !carrying) {
 				text = this.touchMode ? "Tap to pick up" : key ? `${key} to pick up` : "";
 			}

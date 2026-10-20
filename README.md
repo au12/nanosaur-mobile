@@ -4,9 +4,9 @@ Pangea Software's **Nanosaur** (1998), playable in any modern browser — phone,
 
 This builds [Iliyas Jorio's modern Nanosaur source](https://github.com/jorio/Nanosaur) to WebAssembly with a small set of web-port patches, and wraps it in a mobile-first shell:
 
-- **Touch controls** — a floating stick that appears wherever you put your thumb (Nano runs in the direction you push; swing your finger around without lifting and Nano turns with it), a tilted square **Jump** tile and a hazard-guarded round **Fire** button, tap-to-pick-up, a weapon button, jetpack thrust buttons that appear when you have fuel, and two-finger camera swivel/zoom.
+- **Touch controls** — a floating stick that appears wherever you put your thumb: Nano runs the way you push, turns smoothly when you swing your finger round without lifting it, walks or runs depending on how far you push, and stops the moment you let go. **Tap anywhere to jump** (a second finger while running; taps in mid-air are buffered into the double jump). A tap next to an egg picks it up, and a **Throw** button appears while you carry one. A big red **Fire** button, a weapon button, and jetpack thrust buttons that appear when you have fuel.
 - **Touch-friendly menus** — swipe the 3D main-menu wheel or tap any icon; tap the front icon to choose. The settings screen becomes a proper touch sheet, the pause menu gets big buttons (the 3D *Resume* / *Quit* words are tappable too), and high-score names use your phone's keyboard.
-- **Compact HUD** — the original 1998 infobar, cut into floating plaques with the original sprites, so the 3D view fills the screen. The classic full frame is one setting away (and switches live, mid-level).
+- **Compact HUD** — the original 1998 infobar, cut into floating plaques with the original sprites, so the 3D view fills the screen: lives and health top-left, eggs top-right (with a count for extra eggs of a species and a flash for every egg beamed up), time to impact and score bottom-right. The classic full frame is one setting away (and switches live, mid-level).
 - **Landscape lock** — an animated "turn your phone sideways" prompt in portrait; gameplay auto-pauses until you rotate.
 - **Fullscreen + device aspect ratio** — the view fills whatever screen it's on (or keeps the original 4:3, your choice); fullscreen button, Alt+Enter, and orientation lock on Android.
 - **PWA with offline play** — install it to the home screen and it always plays offline. Settings, key bindings and high scores are saved on the device.
@@ -46,12 +46,12 @@ docker build -t nanosaur-mobile .
 | | Touch | Keyboard (PC) | Keyboard (Mac) |
 |---|---|---|---|
 | Move | Drag anywhere | Arrow keys | Arrow keys |
-| Jump / double-jump | Square button | Alt | Command |
+| Jump / double-jump | Tap anywhere (second finger while running) | Alt | Command |
 | Fire | Round button (hold) | Space, left click | Space, left click |
-| Pick up / throw | Tap the screen near an item | Ctrl, middle click | Option, middle click |
+| Pick up / throw | Tap next to an egg / Throw button | Ctrl, middle click | Option, middle click |
 | Change weapon | Tap weapon button (hold for previous) | Shift, `[` `]`, mouse wheel | same |
 | Jetpack up / down | ▲ / ▼ buttons (when you have fuel) | A / Z | A / Z |
-| Camera swivel / zoom | Second finger drag | `,` `.` / `1` `2` | same |
+| Camera swivel / zoom | — | `,` `.` / `1` `2` | same |
 | Camera mode | Eye button | Tab | Tab |
 | Map | Map button | G | G |
 | Pause | Pause button | Esc | Esc |

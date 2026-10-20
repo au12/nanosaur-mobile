@@ -175,6 +175,7 @@ export function applyShellPrefs() {
 	stage.style.setProperty("--ui", { s: 0.85, m: 1, l: 1.18 }[p.ctlSize] || 1);
 	stage.style.setProperty("--ctl-alpha", p.ctlAlpha);
 	touch.setLefty(p.lefty);
+	stage.classList.toggle("lefty", !!p.lefty);
 	$("#fps").hidden = !p.showFps;
 	updateHudScale();
 	// Ask SDL to re-read the (possibly capped) device pixel ratio
@@ -200,9 +201,11 @@ function updateHudScale() {
 
 	const mult = { s: 0.68, m: 0.8, l: 0.95 }[shell.prefs.hudSize] || 0.8;
 	const byHeight = (h / 480) * mult * (isTouchDevice ? 1.15 : 1);
-	// Top row at scale 1: lives 86 + health 292 + time 108 + score 160 + eggs 164, plus gaps
-	const byWidth = (w - safeW - gpsW - 40) / 850;
-	const scale = Math.max(0.45, Math.min(1.7, byHeight, byWidth));
+	// Top row at scale 1: lives 86 + health 292 + eggs 164, plus gaps
+	const byWidth = (w - safeW - gpsW - 40) / 570;
+	// Bottom-right score 160 + time 108 shouldn't take more than ~40% of the width
+	const byBottom = (w * 0.4) / 280;
+	const scale = Math.max(0.45, Math.min(1.7, byHeight, byWidth, byBottom));
 	stage.style.setProperty("--hud", scale.toFixed(3));
 	stage.style.setProperty("--vitals-h", `${Math.round(82 * scale)}px`);
 }
@@ -217,7 +220,7 @@ function layoutHud() {
 	hudEl.style.right = bar ? `${Math.round(bar)}px` : "";
 	const gpsH = innerHeight * 0.30;
 	const avail = innerWidth - bar * 2;
-	const scale = Math.min(parseFloat(getComputedStyle(stage).getPropertyValue("--hud")) || 1, (avail - gpsH - 40) / 850);
+	const scale = Math.min(parseFloat(getComputedStyle(stage).getPropertyValue("--hud")) || 1, (avail - gpsH - 40) / 570);
 	if (bar) hudEl.style.setProperty("--hud", Math.max(0.45, scale).toFixed(3));
 	else hudEl.style.removeProperty("--hud");
 }
