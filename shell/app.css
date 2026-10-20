@@ -405,26 +405,20 @@ img { -webkit-user-drag: none; user-select: none; }
 /* leave room for the game's own 3D GPS map, pinned top-right of the 3D view */
 .hud-eggs { flex: 0 0 auto; margin-right: calc(var(--gps-w, 0px) + 6px); }
 
-/* time to impact + score: bottom-right corner (left of the fire button on touch screens) */
-.hud-score {
+/* bottom-left: time to impact + score, then (keyboard play only) jet fuel + attack mode */
+.hud-bottom {
 	position: absolute;
-	right: max(8px, var(--safe-r));
-	bottom: max(6px, var(--safe-b));
-	align-items: flex-end;
-}
-.hud.touch-layout .hud-score {
-	right: calc(var(--pad-r) + var(--fire-size) + 12px);
-	bottom: var(--pad-b);
-}
-.stage.lefty .hud.touch-layout .hud-score { right: max(8px, var(--safe-r)); }
-
-.hud-gear {
-	position: absolute;
-	bottom: max(6px, var(--safe-b));
 	left: max(8px, var(--safe-l));
+	bottom: max(6px, var(--safe-b));
+	display: flex;
 	align-items: flex-end;
+	gap: calc(10px * var(--hud));
 }
+.hud-score, .hud-gear { align-items: flex-end; }
+.hud.touch-layout .hud-bottom { left: var(--pad-l); bottom: var(--pad-b); }
 .hud.touch-layout .hud-gear { display: none; }
+/* left-handed touch layout puts Fire bottom-left, so the plaques swap to the right */
+.stage.lefty .hud.touch-layout .hud-bottom { left: auto; right: var(--pad-r); }
 
 .plaque {
 	position: relative;
@@ -666,7 +660,7 @@ img { -webkit-user-drag: none; user-select: none; }
 .tctx {
 	position: absolute;
 	right: calc(var(--fire-size) + 14px);
-	bottom: calc(80px * var(--hud) + 14px);
+	bottom: calc(4px * var(--ui));
 	display: flex;
 	flex-direction: row-reverse;
 	align-items: flex-end;
@@ -794,7 +788,7 @@ img { -webkit-user-drag: none; user-select: none; }
 .move-hint {
 	position: absolute;
 	left: 18%;
-	bottom: 18%;
+	bottom: 34%;
 	display: flex;
 	flex-direction: column;
 	align-items: center;

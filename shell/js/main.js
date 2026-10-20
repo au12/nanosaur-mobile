@@ -203,8 +203,8 @@ function updateHudScale() {
 	const byHeight = (h / 480) * mult * (isTouchDevice ? 1.15 : 1);
 	// Top row at scale 1: lives 86 + health 292 + eggs 164, plus gaps
 	const byWidth = (w - safeW - gpsW - 40) / 570;
-	// Bottom-right score 160 + time 108 shouldn't take more than ~40% of the width
-	const byBottom = (w * 0.4) / 280;
+	// Bottom-left row: time 108 + score 160 (+ fuel 70 + attack mode 104 when using a keyboard)
+	const byBottom = (w * 0.45) / (env.touchActive ? 280 : 460);
 	const scale = Math.max(0.45, Math.min(1.7, byHeight, byWidth, byBottom));
 	stage.style.setProperty("--hud", scale.toFixed(3));
 	stage.style.setProperty("--vitals-h", `${Math.round(82 * scale)}px`);
@@ -615,6 +615,7 @@ addEventListener("touchstart", () => {
 		env.touchActive = true;
 		game.setTouchMode(true);
 		hud.setTouchLayout(true);
+		updateHudScale();
 		setUiForScreen();
 		checkOrientation();
 	}
