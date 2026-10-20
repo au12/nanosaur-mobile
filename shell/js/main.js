@@ -22,7 +22,7 @@ const SHELL_DEFAULTS = {
 	silentSwitch: true,		// iOS: play sound even with the ringer switch off
 	seenMoveHint: false,
 	seenTouchHelp: false,
-	macKeyTip: false,
+	macKeyTip2: false,
 };
 
 export const shell = {
@@ -468,6 +468,9 @@ function onGameEvent(type, a, b) {
 		case "prefs":
 			settings.refresh();
 			break;
+		case "keysmigrated":
+			keysMigrated = true;
+			break;
 	}
 }
 
@@ -632,24 +635,27 @@ canvas.addEventListener("mousedown", (e) => {
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 stage.addEventListener("contextmenu", (e) => e.preventDefault());
 
-// macOS: while Command is held, browsers don't deliver keyup for other keys. Command is
-// Nano's jump key on Macs, so release anything pressed during the chord when it comes up.
-const heldDuringMeta = new Set();
-let metaDown = false;
+// macOS: while Command is held, browsers stop delivering keyup events for every other key,
+// whether it went down before or during the chord. Track what's down and, when Command comes
+// back up, release everything else so nothing stays stuck (e.g. an arrow key spinning Nano).
+// Command itself is never bound to a game action for this reason.
+const keysDown = new Set();
+const isMetaCode = (code) => code === "MetaLeft" || code === "MetaRight" || code === "OSLeft" || code === "OSRight";
 addEventListener("keydown", (e) => {
-	if (e.code === "MetaLeft" || e.code === "MetaRight") { metaDown = true; return; }
-	if (metaDown) heldDuringMeta.add(e.code);
+	if (!e.isTrusted) return;
+	if (!isMetaCode(e.code)) keysDown.add(e.code);
 	if (e.code === "Enter" && !game.started && !btnPlay.disabled && !launcher.hidden) onPlay();
 }, true);
 addEventListener("keyup", (e) => {
-	if (e.code !== "MetaLeft" && e.code !== "MetaRight") { heldDuringMeta.delete(e.code); return; }
-	metaDown = false;
-	for (const code of heldDuringMeta) {
-		window.dispatchEvent(new KeyboardEvent("keyup", { code, key: "", bubbles: true }));
+	if (!e.isTrusted) return;
+	if (!isMetaCode(e.code)) { keysDown.delete(e.code); return; }
+	const stale = [...keysDown];
+	keysDown.clear();
+	for (const code of stale) {
+		window.dispatchEvent(new KeyboardEvent("keyup", { code, key: "", bubbles: true, cancelable: true }));
 	}
-	heldDuringMeta.clear();
 }, true);
-addEventListener("blur", () => { heldDuringMeta.clear(); metaDown = false; });
+addEventListener("blur", () => keysDown.clear());
 
 // Pause when the tab/app goes to the background, and silence audio meanwhile
 document.addEventListener("visibilitychange", () => {
@@ -700,13 +706,18 @@ async function updateWakeLock() {
 }
 document.addEventListener("visibilitychange", updateWakeLock);
 
+let keysMigrated = false;
 function maybeShowMacKeyTip() {
 	const isMac = /mac/i.test(navigator.platform) && !isIOS;
-	if (!isMac || env.touchActive || shell.prefs.macKeyTip) return;
-	shell.set("macKeyTip", true);
-	toast("Command jumps, Option picks things up, as on the original Mac version. Remap keys in Settings.", {
-		label: "Keyboard settings", run: () => settings.open({ tab: "keys" }),
-	}, 9000);
+	const openKeys = { label: "Keyboard settings", run: () => settings.open({ tab: "keys" }) };
+	if (keysMigrated) {
+		shell.set("macKeyTip2", true);
+		toast("Jump is now Option and pick up is C. Holding Command made other keys stick in the browser.", openKeys, 10000);
+		return;
+	}
+	if (!isMac || env.touchActive || shell.prefs.macKeyTip2) return;
+	shell.set("macKeyTip2", true);
+	toast("Option jumps and C picks things up. Remap keys in Settings.", openKeys, 9000);
 }
 
 /* ------------------------------------------------------------------ corner buttons & launcher */

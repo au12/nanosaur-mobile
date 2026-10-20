@@ -188,7 +188,7 @@ index 551ea99..d2cc30b 100644
 +#endif
  
 diff --git a/src/Player/Player_Control.c b/src/Player/Player_Control.c
-index 97505b2..fef319d 100644
+index 97505b2..7b26e01 100644
 --- a/src/Player/Player_Control.c
 +++ b/src/Player/Player_Control.c
 @@ -53,6 +53,8 @@ float	gMySpeedPuffCounter;
@@ -200,7 +200,7 @@ index 97505b2..fef319d 100644
  /****************** CALC PLAYER KEY CONTROLS *********************/
  //
  // Converts keys to key control bits or reads the bit fields from the network.
-@@ -78,6 +80,10 @@ static KeyControlType KeysToControlBits(void)
+@@ -78,6 +80,38 @@ static KeyControlType KeysToControlBits(void)
  {
  	KeyControlType bits = 0;					// init to 0
  
@@ -208,10 +208,46 @@ index 97505b2..fef319d 100644
 +	WebMove_Update();							// touch stick & buffered jumps (Web/WebTouchMove.c)
 +#endif
 +
++#if __EMSCRIPTEN__
++	// When both keys of an opposing pair are down, the one pressed most recently wins
++	// (the original always favored left/forward, so pressing right couldn't override left).
++	{
++		static int lastTurn = 0, lastMove = 0;
++
++		if (GetNewNeedState(kNeed_TurnLeft))	lastTurn = -1;
++		if (GetNewNeedState(kNeed_TurnRight))	lastTurn = +1;
++		if (GetNewNeedState(kNeed_Forward))		lastMove = +1;
++		if (GetNewNeedState(kNeed_Backward))	lastMove = -1;
++
++		bool left = GetNeedState(kNeed_TurnLeft), right = GetNeedState(kNeed_TurnRight);
++		if (left && right)
++			bits |= (lastTurn > 0) ? KEYCONTROL_ROTRIGHT : KEYCONTROL_ROTLEFT;
++		else if (left)
++			bits |= KEYCONTROL_ROTLEFT;
++		else if (right)
++			bits |= KEYCONTROL_ROTRIGHT;
++
++		bool fwd = GetNeedState(kNeed_Forward), back = GetNeedState(kNeed_Backward);
++		if (fwd && back)
++			bits |= (lastMove < 0) ? KEYCONTROL_BACKWARD : KEYCONTROL_FORWARD;
++		else if (fwd)
++			bits |= KEYCONTROL_FORWARD;
++		else if (back)
++			bits |= KEYCONTROL_BACKWARD;
++	}
++#else
  	if (GetNeedState(kNeed_TurnLeft))			// rot left
  		bits |= KEYCONTROL_ROTLEFT;
  	else if (GetNeedState(kNeed_TurnRight))		// rot right
-@@ -105,6 +111,10 @@ static KeyControlType KeysToControlBits(void)
+@@ -87,6 +121,7 @@ static KeyControlType KeysToControlBits(void)
+ 		bits |= KEYCONTROL_FORWARD;
+ 	else if (GetNeedState(kNeed_Backward))		// backward
+ 		bits |= KEYCONTROL_BACKWARD;
++#endif
+ 
+ 	if (GetNeedState(kNeed_Jump))				// jump
+ 		bits |= KEYCONTROL_JUMP;
+@@ -105,6 +140,10 @@ static KeyControlType KeysToControlBits(void)
  	if (GetNeedState(kNeed_PickUp))				// try pickup
  		bits |= KEYCONTROL_PICKUP;
  
@@ -222,7 +258,7 @@ index 97505b2..fef319d 100644
  	return(bits);
  }
  
-@@ -138,6 +148,9 @@ Byte		currentAnim;
+@@ -138,6 +177,9 @@ Byte		currentAnim;
  				
  	if (bits & KEYCONTROL_ROTLEFT)
  	{
@@ -232,7 +268,7 @@ index 97505b2..fef319d 100644
  		theNode->Rot.y += 2.0f*slugFactor*gFramesPerSecondFrac;				
  		
  			/* IF SLOW ENOUGH, THEN DO LEFT TURN ANIM */
-@@ -166,6 +179,9 @@ Byte		currentAnim;
+@@ -166,6 +208,9 @@ Byte		currentAnim;
  	else
  	if (bits & KEYCONTROL_ROTRIGHT)
  	{
@@ -242,7 +278,7 @@ index 97505b2..fef319d 100644
  		theNode->Rot.y -= 2.0f*slugFactor*gFramesPerSecondFrac;
  
  			/* IF SLOW ENOUGH, THEN DO RIGHT TURN ANIM */
-@@ -211,6 +227,10 @@ Byte		currentAnim;
+@@ -211,6 +256,10 @@ Byte		currentAnim;
  		theNode->Accel = (-PLAYER_WALK_ACCEL*slugFactor);
  	else
  		theNode->Accel = 0;
@@ -253,7 +289,7 @@ index 97505b2..fef319d 100644
  	
  	
  	
-@@ -236,6 +256,9 @@ Byte		currentAnim;
+@@ -236,6 +285,9 @@ Byte		currentAnim;
  			if ((gDelta.y < 450.0f) && (gDelta.y > -300.0f))							// only double-jump at apex of other jump
  			{
  				gDelta.y = PLAYER_JUMP_SPEED;
@@ -263,7 +299,7 @@ index 97505b2..fef319d 100644
  				MorphToSkeletonAnim(theNode->Skeleton,PLAYER_ANIM_JUMP2,4.0);
  				PlayEffect_Parms(EFFECT_JUMP,FULL_CHANNEL_VOLUME/2,kMiddleC+4);
  			}
-@@ -246,6 +269,9 @@ Byte		currentAnim;
+@@ -246,6 +298,9 @@ Byte		currentAnim;
  			if (theNode->StatusBits & STATUS_BIT_ONGROUND)					// must be on ground
  			{
  				gDelta.y = PLAYER_JUMP_SPEED;
@@ -273,7 +309,7 @@ index 97505b2..fef319d 100644
  				SetSkeletonAnim(theNode->Skeleton,PLAYER_ANIM_JUMP1);
  				PlayEffect_Parms(EFFECT_JUMP,FULL_CHANNEL_VOLUME/2,kMiddleC);
  			}
-@@ -300,7 +326,12 @@ KeyControlType	bits;
+@@ -300,7 +355,12 @@ KeyControlType	bits;
  	bits = gMyControlBits;											// get player control bits
  
  			/* SEE IF ROTATE PLAYER LEFT  */
@@ -287,7 +323,7 @@ index 97505b2..fef319d 100644
  	if (bits & KEYCONTROL_ROTLEFT)
  		theNode->Rot.y += 2*gFramesPerSecondFrac;						
  	
-@@ -321,6 +352,10 @@ KeyControlType	bits;
+@@ -321,6 +381,10 @@ KeyControlType	bits;
  	else
  		theNode->Accel = 0;
  
@@ -298,7 +334,7 @@ index 97505b2..fef319d 100644
  
  			/* SEE IF CHANGE ATTACK MODE */
  
-@@ -380,6 +415,10 @@ float	sumDX,sumDY,sumDZ,maxSpeed;
+@@ -380,6 +444,10 @@ float	sumDX,sumDY,sumDZ,maxSpeed;
  
  	fps = gFramesPerSecondFrac;
  
@@ -597,7 +633,7 @@ index 4472d18..20c2628 100644
  	Render_AllocBackdrop(movie.width, movie.height);
  	Render_SetBackdropClearColor({0,0,0,1});
 diff --git a/src/Screens/SettingsScreen.c b/src/Screens/SettingsScreen.c
-index 5e0ec5b..1aaec6d 100644
+index 5e0ec5b..e93fcc2 100644
 --- a/src/Screens/SettingsScreen.c
 +++ b/src/Screens/SettingsScreen.c
 @@ -45,14 +45,40 @@ typedef struct SettingEntry
@@ -675,7 +711,18 @@ index 5e0ec5b..1aaec6d 100644
  			PlayEffect_Parms(EFFECT_CRYSTAL, FULL_CHANNEL_VOLUME/2, kMiddleC-6);
  			needFullRender = true;
  		}
-@@ -525,6 +557,61 @@ static void NavigateControlsPage_AwaitingPress(void)
+@@ -513,6 +545,10 @@ static void NavigateControlsPage_AwaitingPress(void)
+ 
+ 	for (int i = 0; i < SDL_SCANCODE_COUNT; i++)
+ 	{
++#if __EMSCRIPTEN__
++		if (i == SDL_SCANCODE_LGUI || i == SDL_SCANCODE_RGUI)	// Command breaks key-up delivery in browsers
++			continue;
++#endif
+ 		if (GetNewSDLKeyState(i))
+ 		{
+ 			UnbindScancodeFromAllRemappableInputNeeds(i);
+@@ -525,6 +561,61 @@ static void NavigateControlsPage_AwaitingPress(void)
  	}
  }
  
@@ -737,7 +784,7 @@ index 5e0ec5b..1aaec6d 100644
  static void InitDisplayPref(void)
  {
  	// Init display pref
-@@ -581,6 +668,15 @@ void DoSettingsScreen(void)
+@@ -581,6 +672,15 @@ void DoSettingsScreen(void)
  	while (gSettingsState != kSettingsState_Off)
  	{
  		UpdateInput();
@@ -835,10 +882,23 @@ index f71005a..bbc6701 100644
  			{ ":Images:Help1.tga", ShowHelp_TechInfoOverlay },
  			{ NULL, NULL },
 diff --git a/src/System/File.c b/src/System/File.c
-index f874898..b10e9d9 100644
+index f874898..9744445 100644
 --- a/src/System/File.c
 +++ b/src/System/File.c
-@@ -488,6 +488,10 @@ long				count;
+@@ -453,7 +453,11 @@ PrefsType	prefs;
+ OSErr LoadPrefs(void)
+ {
+ 	InitDefaultPrefs();
+-	return LoadPrefsToBlock(&gGamePrefs);
++	OSErr err = LoadPrefsToBlock(&gGamePrefs);
++#if __EMSCRIPTEN__
++	Web_SanitizeKeyBindings();
++#endif
++	return err;
+ }
+ 
+ 
+@@ -488,6 +492,10 @@ long				count;
  	count = sizeof(PrefsType);
  	FSWrite(refNum, &count, (Ptr)prefs);	
  	FSClose(refNum);
@@ -1084,10 +1144,10 @@ index 9a77264..9a0d871 100644
  		SDL_SetWindowFullscreen(gSDLWindow, 0);
 diff --git a/src/Web/Web.h b/src/Web/Web.h
 new file mode 100644
-index 0000000..2e1e2b4
+index 0000000..e0aeeef
 --- /dev/null
 +++ b/src/Web/Web.h
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,100 @@
 +// WEB.H
 +// Interface between the game code and the browser shell (Emscripten build only).
 +
@@ -1168,7 +1228,8 @@ index 0000000..2e1e2b4
 +void	Web_QuitToLauncher(void);				// blocks (yielding frames) until the shell resumes
 +void	Web_ShowAlert(const char* message, bool fatal);
 +void	Web_PrefsChanged(void);
-+void	Web_ApplyPlatformDefaultKeys(void);	// Mac browsers get the original Mac bindings (Cmd = jump, Option = pick up)
++void	Web_ApplyPlatformDefaultKeys(void);	// Mac browsers: Option = jump, C = pick up (Command is unusable in browsers)
++void	Web_SanitizeKeyBindings(void);		// strips Command from saved bindings
 +void	Web_ApplyHUDStyleLive(void);
 +bool	Web_ConsumeSettingsDirty(void);
 +
@@ -1189,10 +1250,10 @@ index 0000000..2e1e2b4
 +#endif
 diff --git a/src/Web/WebBridge.c b/src/Web/WebBridge.c
 new file mode 100644
-index 0000000..a26b073
+index 0000000..3b19a00
 --- /dev/null
 +++ b/src/Web/WebBridge.c
-@@ -0,0 +1,771 @@
+@@ -0,0 +1,825 @@
 +// WEBBRIDGE.C
 +// Glue between Nanosaur and the browser shell: frame pacing, persistent storage,
 +// virtual (touch) input, HUD export and assorted screen hooks.
@@ -1626,16 +1687,70 @@ index 0000000..a26b073
 +	return /mac/i.test(p) && !(navigator.maxTouchPoints > 1) ? 1 : 0;
 +});
 +
++// Command (GUI) can't be a game key in a browser: on macOS, while Command is held the
++// browser stops delivering key-up events for every other key, so arrow keys released
++// mid-jump stay "held" and Nano spins. Mac players get Option to jump and C to pick up.
++#define WEB_MAC_PICKUP_KEY	SDL_SCANCODE_C
++
++static bool IsGuiScancode(int sc)
++{
++	return sc == SDL_SCANCODE_LGUI || sc == SDL_SCANCODE_RGUI;
++}
++
++static void UnbindScancodeEverywhere(int sc)
++{
++	for (int i = 0; i < NUM_REMAPPABLE_NEEDS; i++)
++		for (int j = 0; j < KEYBINDING_MAX_KEYS; j++)
++			if (gGamePrefs.keys[i].key[j] == sc)
++				gGamePrefs.keys[i].key[j] = 0;
++}
++
 +void Web_ApplyPlatformDefaultKeys(void)
 +{
-+	// The compiled-in defaults are the PC layout (Alt = jump, Ctrl = pick up). On a Mac the
-+	// original game used Command to jump and Option to pick things up, so restore those.
++	// The compiled-in defaults are the PC layout (Alt = jump, Ctrl = pick up). On a Mac,
++	// Ctrl+arrow keys switch Spaces / open Mission Control, so pick-up moves to C.
 +	if (!js_is_mac())
 +		return;
-+	gGamePrefs.keys[kNeed_Jump].key[0]		= SDL_SCANCODE_LGUI;
-+	gGamePrefs.keys[kNeed_Jump].key[1]		= SDL_SCANCODE_RGUI;
-+	gGamePrefs.keys[kNeed_PickUp].key[0]	= SDL_SCANCODE_LALT;
-+	gGamePrefs.keys[kNeed_PickUp].key[1]	= SDL_SCANCODE_RALT;
++	gGamePrefs.keys[kNeed_Jump].key[0]		= SDL_SCANCODE_LALT;
++	gGamePrefs.keys[kNeed_Jump].key[1]		= SDL_SCANCODE_RALT;
++	gGamePrefs.keys[kNeed_PickUp].key[0]	= WEB_MAC_PICKUP_KEY;
++	gGamePrefs.keys[kNeed_PickUp].key[1]	= 0;
++}
++
++void Web_SanitizeKeyBindings(void)
++{
++	bool hadGui = false;
++	for (int i = 0; i < NUM_REMAPPABLE_NEEDS; i++)
++	{
++		for (int j = 0; j < KEYBINDING_MAX_KEYS; j++)
++		{
++			if (IsGuiScancode(gGamePrefs.keys[i].key[j]))
++			{
++				gGamePrefs.keys[i].key[j] = 0;
++				hadGui = true;
++			}
++		}
++	}
++
++	if (!hadGui)
++		return;
++
++	// Older web builds put Jump on Command and Pick Up on Option. Re-home whatever was left empty.
++	KeyBinding* jump = &gGamePrefs.keys[kNeed_Jump];
++	KeyBinding* pick = &gGamePrefs.keys[kNeed_PickUp];
++	if (!jump->key[0] && !jump->key[1])
++	{
++		UnbindScancodeEverywhere(SDL_SCANCODE_LALT);
++		UnbindScancodeEverywhere(SDL_SCANCODE_RALT);
++		jump->key[0] = SDL_SCANCODE_LALT;
++		jump->key[1] = SDL_SCANCODE_RALT;
++	}
++	if (!pick->key[0] && !pick->key[1])
++	{
++		UnbindScancodeEverywhere(WEB_MAC_PICKUP_KEY);
++		pick->key[0] = WEB_MAC_PICKUP_KEY;
++	}
++	js_event_i("keysmigrated", 0, 0);
 +}
 +
 +bool Web_ConsumeSettingsDirty(void)
@@ -1807,7 +1922,7 @@ index 0000000..a26b073
 +		return 0;
 +	if (js_is_mac() && (needID == kNeed_Jump || needID == kNeed_PickUp))
 +	{
-+		static const int16_t mac[2][2] = { {SDL_SCANCODE_LGUI, SDL_SCANCODE_RGUI}, {SDL_SCANCODE_LALT, SDL_SCANCODE_RALT} };
++		static const int16_t mac[2][2] = { {SDL_SCANCODE_LALT, SDL_SCANCODE_RALT}, {WEB_MAC_PICKUP_KEY, 0} };
 +		return mac[needID == kNeed_Jump ? 0 : 1][slot];
 +	}
 +	return kDefaultKeyBindings[needID].key[slot];
@@ -1817,7 +1932,7 @@ index 0000000..a26b073
 +{
 +	if (needID < 0 || needID >= NUM_REMAPPABLE_NEEDS || slot < 0 || slot >= KEYBINDING_MAX_KEYS)
 +		return;
-+	if (scancode < 0 || scancode >= SDL_SCANCODE_COUNT)
++	if (scancode < 0 || scancode >= SDL_SCANCODE_COUNT || IsGuiScancode(scancode))
 +		return;
 +
 +	// Unbind this scancode from other remappable needs (same behavior as the in-game screen)

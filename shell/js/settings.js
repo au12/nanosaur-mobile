@@ -269,7 +269,7 @@ export class Settings {
 			return;
 		}
 		this.note(g, isMac
-			? "These are the original Mac keys: <strong>Command</strong> jumps and <strong>Option</strong> picks things up. Click a key to change it, Delete to clear it, Esc to cancel."
+			? "<strong>Option</strong> jumps and <strong>C</strong> picks things up. (The original Mac version used Command, but while Command is held browsers stop reporting other keys, so they stick.) Click a key to change it, Delete to clear it, Esc to cancel."
 			: "These are the original keys: <strong>Alt</strong> jumps and <strong>Ctrl</strong> picks things up. Click a key to change it, Delete to clear it, Esc to cancel.");
 
 		const M = this.game.M;
@@ -382,6 +382,12 @@ export class Settings {
 			e.stopImmediatePropagation();
 			if (e.type !== "keydown") return;
 			if (e.code === "Escape") { this.stopListening(); return; }
+			if (/^(Meta|OS)(Left|Right)$/.test(e.code)) {
+				b.textContent = "Command can't be used";
+				clearTimeout(this.metaMsgTimer);
+				this.metaMsgTimer = setTimeout(() => { if (this.listening && this.listening.b === b) b.textContent = "Press a key…"; }, 1600);
+				return;
+			}
 			let sc = CODE_TO_SCANCODE[e.code];
 			if (e.code === "Delete" || e.code === "Backspace") sc = 0;
 			if (sc === undefined) return;
