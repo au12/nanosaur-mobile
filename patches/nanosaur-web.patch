@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index f76a20b..5315445 100644
+index f76a20b..9ce736a 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -95,7 +95,9 @@ endif()
@@ -38,7 +38,7 @@ index f76a20b..5315445 100644
 +	target_compile_options(Pomme PRIVATE -fexceptions)
 +	set_source_files_properties(${GAME_SRCDIR}/Web/WebGL_FFP.c PROPERTIES COMPILE_DEFINITIONS NANOSAUR_WEBGL_FFP_IMPL=1)
 +
-+	set(WEB_EXPORTED_FUNCTIONS "_main,_malloc,_free,_Web_SetVirtualNeed,_Web_PulseScancode,_Web_SetStick,_Web_SetTouchMode,_Web_TapAt,_Web_Swipe,_Web_PauseChoice,_Web_SetHighScoreName,_Web_ResumeFromQuit,_Web_GetKeyBinding,_Web_GetDefaultKeyBinding,_Web_SetKeyBinding,_Web_ResetKeyBindings,_Web_GetScancodeName,_Web_GetNumRemappableNeeds,_Web_GetPref,_Web_SetPref,_Web_SavePrefs,_Web_PauseGame,_Web_GetMainMenuSelection,_Web_DebugState")
++	set(WEB_EXPORTED_FUNCTIONS "_main,_malloc,_free,_Web_SetVirtualNeed,_Web_PulseScancode,_Web_SetStick,_Web_SetTouchMode,_Web_TapAt,_Web_Swipe,_Web_PauseChoice,_Web_SetHighScoreName,_Web_ResumeFromQuit,_Web_GetKeyBinding,_Web_GetDefaultKeyBinding,_Web_SetKeyBinding,_Web_ResetKeyBindings,_Web_GetScancodeName,_Web_GetNumRemappableNeeds,_Web_GetPref,_Web_SetPref,_Web_SavePrefs,_Web_PauseGame,_Web_GetMainMenuSelection,_Web_DebugState,_Web_MigratePickupKey")
 +
 +	target_link_options(${GAME_TARGET} PRIVATE
 +		-fexceptions
@@ -881,6 +881,22 @@ index f71005a..bbc6701 100644
  	const struct SlideshowEntry slides[] = {
  			{ ":Images:Help1.tga", ShowHelp_TechInfoOverlay },
  			{ NULL, NULL },
+diff --git a/src/System/Collision.c b/src/System/Collision.c
+index 616ff6b..80bc523 100644
+--- a/src/System/Collision.c
++++ b/src/System/Collision.c
+@@ -544,7 +544,11 @@ ObjNode	*thisNode;
+ 	
+ 				/* SEE IF POINT WITHIN BOUNDING SPHERE (PLUS A LITTLE) OF PICKUP OBJ */
+ 				
++#if __EMSCRIPTEN__
++		if (CalcQuickDistance(thePt->x,thePt->z,thisNode->Coord.x,thisNode->Coord.z) <= thisNode->PickUpCollisionRadius * WEB_PICKUP_RADIUS_SCALE)
++#else
+ 		if (CalcQuickDistance(thePt->x,thePt->z,thisNode->Coord.x,thisNode->Coord.z) <= thisNode->PickUpCollisionRadius)
++#endif
+ 			return(thisNode);
+ 				
+ next:	
 diff --git a/src/System/File.c b/src/System/File.c
 index f874898..9744445 100644
 --- a/src/System/File.c
@@ -1144,10 +1160,10 @@ index 9a77264..9a0d871 100644
  		SDL_SetWindowFullscreen(gSDLWindow, 0);
 diff --git a/src/Web/Web.h b/src/Web/Web.h
 new file mode 100644
-index 0000000..e0aeeef
+index 0000000..8bf7bc3
 --- /dev/null
 +++ b/src/Web/Web.h
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,104 @@
 +// WEB.H
 +// Interface between the game code and the browser shell (Emscripten build only).
 +
@@ -1185,6 +1201,10 @@ index 0000000..e0aeeef
 +	kWebHUD_Compact = 0,
 +	kWebHUD_Classic = 1,
 +};
++
++// Eggs can be grabbed from twice the original distance (the original window was a ~39-unit
++// circle around a point just ahead of Nano's snout, which was very hard to line up).
++#define WEB_PICKUP_RADIUS_SCALE		2.0f
 +
 +// Lifecycle
 +void	Web_InitPersistentStorage(void);		// mounts IDBFS & loads saved files (blocks via Asyncify)
@@ -1250,10 +1270,10 @@ index 0000000..e0aeeef
 +#endif
 diff --git a/src/Web/WebBridge.c b/src/Web/WebBridge.c
 new file mode 100644
-index 0000000..3b19a00
+index 0000000..897ac82
 --- /dev/null
 +++ b/src/Web/WebBridge.c
-@@ -0,0 +1,825 @@
+@@ -0,0 +1,877 @@
 +// WEBBRIDGE.C
 +// Glue between Nanosaur and the browser shell: frame pacing, persistent storage,
 +// virtual (touch) input, HUD export and assorted screen hooks.
@@ -1560,7 +1580,7 @@ index 0000000..3b19a00
 +			&& node->CBits)
 +		{
 +			float d = CalcQuickDistance(mouth.x, mouth.z, node->Coord.x, node->Coord.z);
-+			if (d <= node->PickUpCollisionRadius + 40.0f
++			if (d <= node->PickUpCollisionRadius * WEB_PICKUP_RADIUS_SCALE * 0.95f
 +				&& fabsf(node->Coord.y - gPlayerObj->Coord.y) < 250.0f)
 +			{
 +				return true;
@@ -1689,8 +1709,10 @@ index 0000000..3b19a00
 +
 +// Command (GUI) can't be a game key in a browser: on macOS, while Command is held the
 +// browser stops delivering key-up events for every other key, so arrow keys released
-+// mid-jump stay "held" and Nano spins. Mac players get Option to jump and C to pick up.
-+#define WEB_MAC_PICKUP_KEY	SDL_SCANCODE_C
++// mid-jump stay "held" and Nano spins. Mac players get Option to jump.
++// Pick up defaults to X on every platform (PCs also keep the original Ctrl as a second key;
++// on a Mac, Ctrl+arrow keys are system shortcuts).
++#define WEB_PICKUP_KEY		SDL_SCANCODE_X
 +
 +static bool IsGuiScancode(int sc)
 +{
@@ -1705,16 +1727,44 @@ index 0000000..3b19a00
 +				gGamePrefs.keys[i].key[j] = 0;
 +}
 +
++static int16_t DefaultWebKey(int needID, int slot)
++{
++	const bool mac = js_is_mac();
++	if (needID == kNeed_PickUp)
++		return slot == 0 ? WEB_PICKUP_KEY : (mac ? 0 : SDL_SCANCODE_LCTRL);
++	if (needID == kNeed_Jump && mac)
++		return slot == 0 ? SDL_SCANCODE_LALT : SDL_SCANCODE_RALT;
++	return kDefaultKeyBindings[needID].key[slot];
++}
++
 +void Web_ApplyPlatformDefaultKeys(void)
 +{
-+	// The compiled-in defaults are the PC layout (Alt = jump, Ctrl = pick up). On a Mac,
-+	// Ctrl+arrow keys switch Spaces / open Mission Control, so pick-up moves to C.
-+	if (!js_is_mac())
-+		return;
-+	gGamePrefs.keys[kNeed_Jump].key[0]		= SDL_SCANCODE_LALT;
-+	gGamePrefs.keys[kNeed_Jump].key[1]		= SDL_SCANCODE_RALT;
-+	gGamePrefs.keys[kNeed_PickUp].key[0]	= WEB_MAC_PICKUP_KEY;
-+	gGamePrefs.keys[kNeed_PickUp].key[1]	= 0;
++	for (int slot = 0; slot < KEYBINDING_MAX_KEYS; slot++)
++	{
++		gGamePrefs.keys[kNeed_Jump].key[slot]	= DefaultWebKey(kNeed_Jump, slot);
++		gGamePrefs.keys[kNeed_PickUp].key[slot]	= DefaultWebKey(kNeed_PickUp, slot);
++	}
++}
++
++// One-time update for players whose saved Pick Up key is still an old default (C on a Mac
++// from the previous web build, or the original Ctrl keys): move it to X, unless X is taken.
++EMSCRIPTEN_KEEPALIVE int Web_MigratePickupKey(void)
++{
++	KeyBinding* pick = &gGamePrefs.keys[kNeed_PickUp];
++	bool oldMac = pick->key[0] == SDL_SCANCODE_C && pick->key[1] == 0;
++	bool oldPc  = pick->key[0] == SDL_SCANCODE_LCTRL && pick->key[1] == SDL_SCANCODE_RCTRL;
++	if (!oldMac && !oldPc)
++		return 0;
++
++	for (int i = 0; i < NUM_REMAPPABLE_NEEDS; i++)
++		for (int j = 0; j < KEYBINDING_MAX_KEYS; j++)
++			if (i != kNeed_PickUp && gGamePrefs.keys[i].key[j] == WEB_PICKUP_KEY)
++				return 0;									// player put X on something else
++
++	pick->key[0] = DefaultWebKey(kNeed_PickUp, 0);
++	pick->key[1] = DefaultWebKey(kNeed_PickUp, 1);
++	SavePrefs(&gGamePrefs);
++	return 1;
 +}
 +
 +void Web_SanitizeKeyBindings(void)
@@ -1747,8 +1797,8 @@ index 0000000..3b19a00
 +	}
 +	if (!pick->key[0] && !pick->key[1])
 +	{
-+		UnbindScancodeEverywhere(WEB_MAC_PICKUP_KEY);
-+		pick->key[0] = WEB_MAC_PICKUP_KEY;
++		UnbindScancodeEverywhere(WEB_PICKUP_KEY);
++		pick->key[0] = WEB_PICKUP_KEY;
 +	}
 +	js_event_i("keysmigrated", 0, 0);
 +}
@@ -1920,12 +1970,7 @@ index 0000000..3b19a00
 +{
 +	if (needID < 0 || needID >= NUM_REMAPPABLE_NEEDS || slot < 0 || slot >= KEYBINDING_MAX_KEYS)
 +		return 0;
-+	if (js_is_mac() && (needID == kNeed_Jump || needID == kNeed_PickUp))
-+	{
-+		static const int16_t mac[2][2] = { {SDL_SCANCODE_LALT, SDL_SCANCODE_RALT}, {WEB_MAC_PICKUP_KEY, 0} };
-+		return mac[needID == kNeed_Jump ? 0 : 1][slot];
-+	}
-+	return kDefaultKeyBindings[needID].key[slot];
++	return DefaultWebKey(needID, slot);
 +}
 +
 +EMSCRIPTEN_KEEPALIVE void Web_SetKeyBinding(int needID, int slot, int scancode)
@@ -2055,11 +2100,26 @@ index 0000000..3b19a00
 +		Web_SetVirtualNeed(kNeed_UIPause, 2);
 +}
 +
-+// Diagnostics for the shell's ?debug overlay and automated control tests:
-+// [rotY, speed, deltaX, deltaZ, anim, x, z, deltaY]
++// Diagnostics for automated control tests:
++// [rotY, speed, deltaX, deltaZ, anim, x, z, deltaY, carrying, eggDistBody, eggPickupRadius, eggDistMouth]
++static ObjNode* FindNearestPickup(float* outDist)
++{
++	ObjNode* best = NULL;
++	float bestD = 1e9f;
++	for (ObjNode* n = gFirstNodePtr; n; n = n->NextNode)
++	{
++		if (n->Slot >= SLOT_OF_DUMB) break;
++		if (!(n->CType & CTYPE_PICKUP) || !n->CBits) continue;
++		float d = CalcQuickDistance(gPlayerObj->Coord.x, gPlayerObj->Coord.z, n->Coord.x, n->Coord.z);
++		if (d < bestD) { bestD = d; best = n; }
++	}
++	if (outDist) *outDist = bestD;
++	return best;
++}
++
 +EMSCRIPTEN_KEEPALIVE float* Web_DebugState(void)
 +{
-+	static float st[8];
++	static float st[12];
 +	SDL_memset(st, 0, sizeof(st));
 +	if (gPlayerObj && gTerrainPtr)
 +	{
@@ -2071,6 +2131,18 @@ index 0000000..3b19a00
 +		st[5] = gPlayerObj->Coord.x;
 +		st[6] = gPlayerObj->Coord.z;
 +		st[7] = gPlayerObj->Delta.y;
++		st[8] = (gPlayerObj->StatusBits & STATUS_BIT_ISCARRYING) ? 1 : 0;
++		float d;
++		ObjNode* egg = FindNearestPickup(&d);
++		if (egg && gPlayerObj->Skeleton)
++		{
++			static const TQ3Point3D inPoint = {0, 0, -30};
++			TQ3Point3D mouth;
++			FindCoordOnJoint(gPlayerObj, MYGUY_LIMB_HEAD, &inPoint, &mouth);
++			st[9] = d;
++			st[10] = egg->PickUpCollisionRadius;
++			st[11] = CalcQuickDistance(mouth.x, mouth.z, egg->Coord.x, egg->Coord.z);
++		}
 +	}
 +	return st;
 +}

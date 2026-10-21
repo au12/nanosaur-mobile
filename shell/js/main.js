@@ -23,6 +23,7 @@ const SHELL_DEFAULTS = {
 	seenMoveHint: false,
 	seenTouchHelp: false,
 	macKeyTip2: false,
+	keysV: 0,
 };
 
 export const shell = {
@@ -710,14 +711,27 @@ let keysMigrated = false;
 function maybeShowMacKeyTip() {
 	const isMac = /mac/i.test(navigator.platform) && !isIOS;
 	const openKeys = { label: "Keyboard settings", run: () => settings.open({ tab: "keys" }) };
+
+	// One-time move of an old default Pick Up key (C, or Ctrl) to X
+	let pickupMoved = false;
+	if ((shell.prefs.keysV || 0) < 3) {
+		pickupMoved = !!game.M._Web_MigratePickupKey();
+		shell.set("keysV", 3);
+	}
+
 	if (keysMigrated) {
 		shell.set("macKeyTip2", true);
-		toast("Jump is now Option and pick up is C. Holding Command made other keys stick in the browser.", openKeys, 10000);
+		toast("Jump is now Option and pick up is X. Holding Command made other keys stick in the browser.", openKeys, 10000);
+		return;
+	}
+	if (pickupMoved && !env.touchActive) {
+		shell.set("macKeyTip2", true);
+		toast("Pick up is now the X key.", openKeys, 8000);
 		return;
 	}
 	if (!isMac || env.touchActive || shell.prefs.macKeyTip2) return;
 	shell.set("macKeyTip2", true);
-	toast("Option jumps and C picks things up. Remap keys in Settings.", openKeys, 9000);
+	toast("Option jumps and X picks things up. Remap keys in Settings.", openKeys, 9000);
 }
 
 /* ------------------------------------------------------------------ corner buttons & launcher */

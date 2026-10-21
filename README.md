@@ -10,7 +10,7 @@ This builds [Iliyas Jorio's modern Nanosaur source](https://github.com/jorio/Nan
 - **Landscape lock** — an animated "turn your phone sideways" prompt in portrait; gameplay auto-pauses until you rotate.
 - **Fullscreen + device aspect ratio** — the view fills whatever screen it's on (or keeps the original 4:3, your choice); fullscreen button, Alt+Enter, and orientation lock on Android.
 - **PWA with offline play** — install it to the home screen and it always plays offline. Settings, key bindings and high scores are saved on the device.
-- **Desktop** — the original PC key bindings (Alt jumps, Ctrl picks up), fully remappable from Settings → Keyboard, plus a one-click "browser-friendly" preset. On a Mac, Option jumps and C picks up: the original Mac release used Command, but browsers stop reporting key releases while Command is held, which leaves keys stuck, so Command can't be bound. When opposite keys are both held (left + right), the one pressed last wins. Mouse and game controllers work too.
+- **Desktop** — the original PC key bindings (Alt jumps), fully remappable from Settings → Keyboard, plus a one-click "letter keys only" preset. Pick up is on X by default (Ctrl, the original key, also works on PCs), with a pick-up range twice the original's. On a Mac, Option jumps: the original Mac release used Command, but browsers stop reporting key releases while Command is held, which leaves keys stuck, so Command can't be bound. When opposite keys are both held (left + right), the one pressed last wins. Mouse and game controllers work too.
 - **Extras** — render-resolution and 30 fps battery-saver options for older phones, an FPS counter, HUD size, left-handed button layout, button size/opacity, vibration feedback, screen wake lock, auto-pause when the app goes to the background, and an update prompt when a new build is deployed.
 
 ## Run it
@@ -48,7 +48,7 @@ docker build -t nanosaur-mobile .
 | Move | Drag anywhere | Arrow keys | Arrow keys |
 | Jump / double-jump | Tap anywhere (second finger while running) | Alt | Option |
 | Fire | Round button (hold) | Space, left click | Space, left click |
-| Pick up / throw | Tap next to an egg / Throw button | Ctrl, middle click | C, middle click |
+| Pick up / throw | Tap next to an egg / Throw button | X or Ctrl, middle click | X, middle click |
 | Change weapon | Tap weapon button (hold for previous) | Shift, `[` `]`, mouse wheel | same |
 | Jetpack up / down | ▲ / ▼ buttons (when you have fuel) | A / Z | A / Z |
 | Camera swivel / zoom | — | `,` `.` / `1` `2` | same |

@@ -269,8 +269,8 @@ export class Settings {
 			return;
 		}
 		this.note(g, isMac
-			? "<strong>Option</strong> jumps and <strong>C</strong> picks things up. (The original Mac version used Command, but while Command is held browsers stop reporting other keys, so they stick.) Click a key to change it, Delete to clear it, Esc to cancel."
-			: "These are the original keys: <strong>Alt</strong> jumps and <strong>Ctrl</strong> picks things up. Click a key to change it, Delete to clear it, Esc to cancel.");
+			? "<strong>Option</strong> jumps and <strong>X</strong> picks things up. (The original Mac version used Command, but while Command is held browsers stop reporting other keys, so they stick.) Click a key to change it, Delete to clear it, Esc to cancel."
+			: "<strong>Alt</strong> jumps and <strong>X</strong> picks things up (Ctrl, the original pick-up key, works too). Click a key to change it, Delete to clear it, Esc to cancel.");
 
 		const M = this.game.M;
 		const table = document.createElement("table");
@@ -300,21 +300,21 @@ export class Settings {
 		const row = document.createElement("div");
 		row.className = "btn-row";
 		g.append(row);
-		this.button(row, "Restore original keys", "", () => {
+		this.button(row, "Restore default keys", "", () => {
 			M._Web_ResetKeyBindings();
 			this.game.savePrefs();
 			this.render();
 		});
-		this.button(row, "Browser-friendly keys", "", () => {
+		this.button(row, "Letter keys only", "", () => {
 			// Move modifier-key actions onto letters, avoiding browser and OS shortcuts
-			M._Web_SetKeyBinding(NEED.Jump, 0, SC.X);
-			M._Web_SetKeyBinding(NEED.Jump, 1, 0);
-			M._Web_SetKeyBinding(NEED.PickUp, 0, SC.C);
+			M._Web_SetKeyBinding(NEED.PickUp, 0, SC.X);
 			M._Web_SetKeyBinding(NEED.PickUp, 1, 0);
+			M._Web_SetKeyBinding(NEED.Jump, 0, SC.C);
+			M._Web_SetKeyBinding(NEED.Jump, 1, 0);
 			this.game.savePrefs();
 			this.render();
 		});
-		this.note(g, "Browser-friendly keys put Jump on <strong>X</strong> and Pick up on <strong>C</strong>, so holding a modifier never triggers browser shortcuts. The mouse works too: left click shoots, right click jumps, middle click picks up. Game controllers are supported: connect one and press a button.");
+		this.note(g, "Letter keys only puts Jump on <strong>C</strong> next to Pick up on <strong>X</strong>, so holding a modifier never triggers browser shortcuts. The mouse works too: left click shoots, right click jumps, middle click picks up. Game controllers are supported: connect one and press a button.");
 	}
 
 	renderAbout(pane) {
