@@ -92,6 +92,18 @@ Serve the output folder with any static web server.
 
 Bump `NANOSAUR_COMMIT` in the Dockerfile. If the patch no longer applies, check out the new commit, apply `patches/nanosaur-web.patch` with `git apply --3way`, resolve, and regenerate it with `git diff <commit> -- . ':(exclude)extern' > patches/nanosaur-web.patch`.
 
+## In the arcade
+
+Nanosaur can run inside the [au12 Arcade](https://github.com/au12/arcade), the family launcher that puts every game behind one installable app, with shared players and high scores across the games (and a real cabinet, if you build one).
+
+Set `ARCADE_URL` on the container to the arcade's address, for example `https://arcade.example.com`. Then:
+
+- Each finished game's score (when the high-score screen comes up after the ending or your last life) goes on the arcade's Nanosaur leaderboard, earns tickets and counts toward achievements. The high-score name starts as the arcade player's name.
+- Opening the arcade's menu (the cabinet's menu button, or F9) pauses the game.
+- Played on its own rather than inside the arcade, the game still sends scores to the arcade for whoever that browser last played as there. At start, the container writes `/arcade.json` with the address, which is how the game finds it.
+
+With `ARCADE_URL` empty, nothing changes.
+
 ## License
 
 Nanosaur is © 1998 Pangea Software, Inc.; the modern source and game data are licensed **CC BY-NC-SA 4.0** by Pangea Software and Iliyas Jorio. The patches and web shell in this repo are offered under the same terms. Keep it non-commercial. Fonts: Lilita One and Nunito (SIL Open Font License, included).

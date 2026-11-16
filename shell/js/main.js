@@ -4,6 +4,7 @@ import { NEED, SCREEN, PREF, MENU_ITEMS, HUD_FLAG } from "./constants.js";
 import { Hud } from "./hud.js";
 import { TouchControls } from "./touch.js";
 import { Settings } from "./settings.js";
+import { arcade } from "./arcade.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -378,7 +379,10 @@ function bootGame() {
 		SDL3: audioContext ? { audioContext } : {},
 		nanoWaitFrame: waitFrame,
 		nanoEvent: onGameEvent,
-		nanoHUD: (...v) => hud.update(v, game),
+		nanoHUD: (...v) => {
+			lastScore = v[1];
+			hud.update(v, game);
+		},
 		onAbort: (what) => fatal(String(what)),
 	};
 	game.M = M;
@@ -427,6 +431,27 @@ function hideLauncher() {
 	setTimeout(() => { launcher.hidden = true; }, 450);
 }
 
+/* ------------------------------------------------------------------ the arcade */
+
+// The game ends on the high-score screen (after the ending movie, or after
+// losing the last life). The HUD has the final score by then.
+let lastScore = 0;
+const PLAYING = [SCREEN.Game, SCREEN.Paused, SCREEN.Movie];
+function arcadeScreen(prev, next) {
+	if (next === SCREEN.Game) arcade.status("playing");
+	else if (next === SCREEN.Paused) arcade.status("paused");
+	else if (next === SCREEN.MainMenu) arcade.status("menu");
+	if (next === SCREEN.HighScores && PLAYING.includes(prev)) {
+		arcade.status("over");
+		if (lastScore > 0) arcade.score(lastScore);
+		lastScore = 0;
+	}
+}
+// The arcade's menu pauses the game, like switching apps does.
+arcade.on("pause", () => {
+	if (game.screen === SCREEN.Game) game.pause();
+});
+
 /* ------------------------------------------------------------------ game events */
 
 function onGameEvent(type, a, b) {
@@ -442,6 +467,7 @@ function onGameEvent(type, a, b) {
 			maybeShowMacKeyTip();
 			break;
 		case "screen":
+			arcadeScreen(game.screen, a);
 			game.screen = a;
 			setUiForScreen();
 			updateWakeLock();
@@ -543,7 +569,10 @@ const nameForm = $("#nameEntry");
 const nameInput = $("#nameInput");
 function openNameEntry(maxLen) {
 	nameInput.maxLength = Math.max(1, Math.min(32, maxLen || 15));
-	nameInput.value = "";
+	// Inside the arcade, the name starts as the arcade player's.
+	const arcadeName = (arcade.player?.name || "").toUpperCase().replace(/[^A-Z0-9 #!?'.:\-]/g, "").slice(0, nameInput.maxLength);
+	nameInput.value = arcadeName;
+	if (arcadeName) game.setName(arcadeName, false);
 	nameForm.hidden = false;
 	if (!env.touchActive) setTimeout(() => nameInput.focus(), 50);
 }
