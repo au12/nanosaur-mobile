@@ -42,6 +42,8 @@ LABEL org.opencontainers.image.title="Nanosaur Web" \
       org.opencontainers.image.licenses="CC-BY-NC-SA-4.0"
 
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf
+# ARCADE_URL → /arcade.json at start (see "In the arcade" in the README)
+COPY --chmod=755 nginx/arcade.sh /docker-entrypoint.d/40-arcade.sh
 COPY --from=build /work/dist /usr/share/nginx/html
 
 EXPOSE 80

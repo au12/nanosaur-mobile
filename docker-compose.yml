@@ -3,6 +3,10 @@ services:
     build: .
     image: nanosaur-mobile:latest
     container_name: nanosaur
+    environment:
+      # Show this game in the au12 Arcade and send it the scores (see README),
+      # e.g. "https://arcade.example.com". Empty: no arcade.
+      ARCADE_URL: ""
     restart: unless-stopped
     ports:
       - "8086:80"
